@@ -89,8 +89,12 @@ async function request<T>(
 
   let response = await doFetch(getToken());
 
-  // Attempt one token refresh + retry for protected endpoints.
-  if (response.status === 401 && path !== '/api/auth/refresh') {
+  const isAuthRoute = path.startsWith('/api/auth/');
+
+  // Attempt one token refresh + retry for protected resource endpoints only.
+  // Never replay authentication-step routes because that can duplicate OTP checks
+  // and produce inconsistent login behavior.
+  if (response.status === 401 && !isAuthRoute) {
     const refreshedAccessToken = await refreshAccessToken();
     if (refreshedAccessToken) {
       response = await doFetch(refreshedAccessToken);

@@ -1,9 +1,11 @@
 import { supabase } from '../lib/supabaseClient.js';
 import { isAdmin, assertRole } from '../lib/roleUtils.js';
 
+const isAutoManagedPageantStatus = (status) => ['upcoming', 'active', 'completed'].includes(status);
+
 // Helper function to determine pageant status based on event date
-const determinePageantStatus = (eventDate) => {
-  const now = new Date();
+const determinePageantStatus = (eventDate, nowInput = new Date()) => {
+  const now = new Date(nowInput);
   const event = new Date(eventDate);
   
   // Reset time to compare just dates
@@ -19,9 +21,67 @@ const determinePageantStatus = (eventDate) => {
   }
 };
 
+const resolvePageantStatus = (pageant, now = new Date()) => {
+  if (!isAutoManagedPageantStatus(pageant.status)) return pageant.status;
+  return determinePageantStatus(pageant.event_date, now);
+};
+
+const reconcilePageantStatuses = async () => {
+  const { data, error } = await supabase
+    .from('pageants')
+    .select('id, status, event_date')
+    .in('status', ['upcoming', 'active']);
+
+  if (error) throw error;
+
+  const now = new Date();
+  const updates = (data ?? [])
+    .map((pageant) => {
+      const nextStatus = resolvePageantStatus(pageant, now);
+      return nextStatus === pageant.status ? null : { id: pageant.id, status: nextStatus };
+    })
+    .filter(Boolean);
+
+  if (updates.length === 0) return;
+
+  await Promise.all(
+    updates.map((update) =>
+      supabase
+        .from('pageants')
+        .update({ status: update.status, updated_at: now.toISOString() })
+        .eq('id', update.id)
+    )
+  );
+};
+
+const reconcilePageantStatusById = async (pageantId) => {
+  const { data: pageant, error } = await supabase
+    .from('pageants')
+    .select('id, status, event_date')
+    .eq('id', pageantId)
+    .maybeSingle();
+
+  if (error || !pageant) return;
+
+  const nextStatus = resolvePageantStatus(pageant);
+  if (nextStatus === pageant.status) return;
+
+  await supabase
+    .from('pageants')
+    .update({ status: nextStatus, updated_at: new Date().toISOString() })
+    .eq('id', pageantId);
+};
+
 // GET /api/pageants
 export const getPageants = async (req, res) => {
   const { status, assignedToMe } = req.query;
+
+  // Keep pageant statuses aligned with current time window before serving lists.
+  try {
+    await reconcilePageantStatuses();
+  } catch (reconcileError) {
+    console.warn('[getPageants] status reconciliation skipped:', reconcileError?.message || reconcileError);
+  }
 
   if (String(assignedToMe).toLowerCase() === 'true') {
     let assignmentQuery = supabase
@@ -54,6 +114,12 @@ export const getPageants = async (req, res) => {
 
 // GET /api/pageants/:id
 export const getPageantById = async (req, res) => {
+  try {
+    await reconcilePageantStatusById(req.params.id);
+  } catch (reconcileError) {
+    console.warn('[getPageantById] status reconciliation skipped:', reconcileError?.message || reconcileError);
+  }
+
   const { data, error } = await supabase
     .from('pageants')
     .select('*')

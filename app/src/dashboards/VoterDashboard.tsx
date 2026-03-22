@@ -22,6 +22,7 @@ import {
 } from '@/services/electionService';
 import type { Election, Candidate, ElectionPosition, Vote as VoteType, User } from '@/types';
 import { formatDate, formatDateTime, formatElectionType } from '@/utils/formatters';
+import { useSupabaseProfile, DEFAULT_PROFILE_AVATAR } from '@/hooks/useSupabaseProfile';
 import {
   Dialog,
   DialogContent,
@@ -759,6 +760,18 @@ function VotingHistory({
 // VOTER PROFILE
 // ============================================
 function VoterProfile({ user }: { user: User }) {
+  const { profile, isLoading } = useSupabaseProfile();
+
+  const displayName = profile?.name || `${user.firstName} ${user.lastName}`.trim() || 'User';
+  const displayEmail = profile?.email || user.email || 'No email available';
+  const displayAvatar = profile?.avatarUrl || user.photoUrl || user.photoPath || DEFAULT_PROFILE_AVATAR;
+  const initials = displayName
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() || '')
+    .join('') || 'U';
+
   return (
     <div className="max-w-2xl">
       <Card>
@@ -767,35 +780,55 @@ function VoterProfile({ user }: { user: User }) {
           <CardDescription>Your account information</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="flex items-center gap-4">
-            <div className="w-20 h-20 rounded-full bg-[#1E3A8A] flex items-center justify-center text-white text-2xl font-bold">
-              {user.firstName[0]}{user.lastName[0]}
+          {isLoading ? (
+            <div className="flex items-center gap-4" aria-busy="true" aria-live="polite">
+              <div className="w-20 h-20 rounded-full bg-gray-200 animate-pulse" />
+              <div className="space-y-2">
+                <div className="h-5 w-40 bg-gray-200 rounded animate-pulse" />
+                <div className="h-4 w-52 bg-gray-200 rounded animate-pulse" />
+              </div>
             </div>
-            <div>
-              <h3 className="text-xl font-semibold text-gray-900">
-                {user.firstName} {user.lastName}
-              </h3>
-              <p className="text-gray-500">{user.email}</p>
-              {user.studentId && (
-                <p className="text-sm text-gray-400">Student ID: {user.studentId}</p>
-              )}
+          ) : (
+            <div className="flex items-center gap-4">
+              <div className="w-20 h-20 rounded-full bg-[#1E3A8A] overflow-hidden flex items-center justify-center text-white text-2xl font-bold">
+                <img
+                  src={displayAvatar}
+                  alt="Profile"
+                  className="w-full h-full object-cover"
+                  onError={(e) => {
+                    e.currentTarget.src = DEFAULT_PROFILE_AVATAR;
+                  }}
+                />
+              </div>
+              <div>
+                <h3 className="text-xl font-semibold text-gray-900">{displayName}</h3>
+                <p className="text-gray-500">{displayEmail}</p>
+                {user.studentId && (
+                  <p className="text-sm text-gray-400">Student ID: {user.studentId}</p>
+                )}
+                {!profile && <p className="text-xs text-gray-400 mt-1">Using local account fallback profile.</p>}
+              </div>
             </div>
-          </div>
+          )}
 
           <Separator />
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <ProfileLabel>First Name</ProfileLabel>
-              <p className="text-sm text-gray-900 mt-1">{user.firstName}</p>
+              <p className="text-sm text-gray-900 mt-1">{profile ? displayName.split(/\s+/)[0] || 'User' : user.firstName || 'User'}</p>
             </div>
             <div>
               <ProfileLabel>Last Name</ProfileLabel>
-              <p className="text-sm text-gray-900 mt-1">{user.lastName}</p>
+              <p className="text-sm text-gray-900 mt-1">{profile ? displayName.split(/\s+/).slice(1).join(' ') || 'N/A' : user.lastName || 'N/A'}</p>
             </div>
             <div>
               <ProfileLabel>Email</ProfileLabel>
-              <p className="text-sm text-gray-900 mt-1">{user.email}</p>
+              <p className="text-sm text-gray-900 mt-1">{displayEmail}</p>
+            </div>
+            <div>
+              <ProfileLabel>Display Initials</ProfileLabel>
+              <p className="text-sm text-gray-900 mt-1">{initials}</p>
             </div>
             <div>
               <ProfileLabel>Student ID</ProfileLabel>

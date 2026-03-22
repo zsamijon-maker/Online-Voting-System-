@@ -6,7 +6,8 @@ import type {
   RegisterData,
   RegistrationSetupData,
 } from '@/types';
-import { api, setToken, clearToken, getToken, camelize } from '@/lib/api';
+import { api, setToken, clearToken, getToken, getRefreshToken, camelize } from '@/lib/api';
+import { supabase } from '@/lib/supabaseClient';
 
 interface LoginResult {
   success: boolean;
@@ -66,10 +67,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  const syncSupabaseSession = useCallback(async (accessToken?: string | null, refreshToken?: string | null) => {
+    if (!accessToken || !refreshToken) return;
+    try {
+      await supabase.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+    } catch (error) {
+      console.warn('[AuthContext] Supabase session sync failed:', (error as Error).message);
+    }
+  }, []);
+
   // On mount: if a token exists, fetch the current user from the backend
   useEffect(() => {
     const token = getToken();
     if (token) {
+      const refreshToken = getRefreshToken();
+      void syncSupabaseSession(token, refreshToken);
       api.get<unknown>('/api/users/me')
         .then(data => setUser(camelize<User>(data)))
         .catch(() => clearToken())
@@ -77,7 +89,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } else {
       setIsLoading(false);
     }
-  }, []);
+  }, [syncSupabaseSession]);
 
   // ── Login Step 1: verify password, receive challenge token ──────────────
   const login = useCallback(async (credentials: LoginCredentials): Promise<LoginResult> => {
@@ -111,6 +123,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           '/api/auth/verify-totp',
           { challengeToken, totpCode: normalizedTotpCode }
         );
+        await syncSupabaseSession(data.accessToken, data.refreshToken);
         setToken(data.accessToken, data.refreshToken);
         setUser(camelize<User>(data.user));
         return { success: true };
@@ -130,6 +143,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           '/api/auth/setup-staff-totp',
           { challengeToken, totpCode: normalizedTotpCode }
         );
+        await syncSupabaseSession(data.accessToken, data.refreshToken);
         setToken(data.accessToken, data.refreshToken);
         setUser(camelize<User>(data.user));
         return { success: true };
@@ -177,6 +191,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // Ignore logout errors
     } finally {
+      await supabase.auth.signOut({ scope: 'local' }).catch(() => null);
       clearToken();
       setUser(null);
     }

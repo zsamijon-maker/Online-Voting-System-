@@ -29,24 +29,66 @@ const createElectionPositions = async (electionId, type) => {
   return data ?? [];
 };
 
-// Helper function to determine status based on dates
-const determineStatus = (startDate, endDate) => {
-  const now = new Date();
+const isAutoManagedElectionStatus = (status) => ['upcoming', 'active', 'closed'].includes(status);
+
+const computeTimedElectionStatus = (startDate, endDate, now = new Date()) => {
   const start = new Date(startDate);
   const end = new Date(endDate);
 
-  if (now < start) {
-    return 'upcoming';
-  } else if (now >= start && now <= end) {
-    return 'active';
-  } else {
-    return 'closed';
-  }
+  if (now < start) return 'upcoming';
+  if (now >= start && now <= end) return 'active';
+  return 'closed';
+};
+
+const resolveElectionStatus = (election, now = new Date()) => {
+  if (!isAutoManagedElectionStatus(election.status)) return election.status;
+  return computeTimedElectionStatus(election.start_date, election.end_date, now);
+};
+
+const reconcileElectionStatuses = async () => {
+  const { data, error } = await supabase
+    .from('elections')
+    .select('id, status, start_date, end_date')
+    .in('status', ['upcoming', 'active']);
+
+  if (error) throw error;
+
+  const now = new Date();
+  const updates = (data ?? [])
+    .map((election) => {
+      const nextStatus = resolveElectionStatus(election, now);
+      return nextStatus === election.status ? null : { id: election.id, status: nextStatus };
+    })
+    .filter(Boolean);
+
+  if (updates.length === 0) return;
+
+  await Promise.all(
+    updates.map((update) =>
+      supabase
+        .from('elections')
+        .update({ status: update.status, updated_at: now.toISOString() })
+        .eq('id', update.id)
+    )
+  );
+};
+
+// Helper function to determine status based on dates
+const determineStatus = (startDate, endDate) => {
+  return computeTimedElectionStatus(startDate, endDate);
 };
 
 // GET /api/elections
 export const getElections = async (req, res) => {
   const { status } = req.query;
+
+  // Keep DB statuses aligned with current time window before serving voters/admins.
+  try {
+    await reconcileElectionStatuses();
+  } catch (reconcileError) {
+    console.warn('[getElections] status reconciliation skipped:', reconcileError?.message || reconcileError);
+  }
+
   let query = supabase.from('elections').select('*').order('created_at', { ascending: false });
   if (status) query = query.eq('status', status);
   const { data, error } = await query;

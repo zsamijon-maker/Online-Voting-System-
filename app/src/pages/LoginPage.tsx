@@ -71,6 +71,8 @@ export default function LoginPage() {
     if (isGoogleLoading) return;
     setIsGoogleLoading(true);
     try {
+      // Clear any stale local OAuth session so callback always uses the fresh one.
+      await supabase.auth.signOut({ scope: 'local' });
       await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
@@ -121,6 +123,11 @@ export default function LoginPage() {
   // LOGIN — Step 2: verify TOTP code
   const handleVerifyLoginTotp = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!loginChallengeToken) {
+      showError('Your verification session expired. Please log in again.');
+      resetLoginFlow();
+      return;
+    }
     if (otpSubmitInFlightRef.current) return;
     otpSubmitInFlightRef.current = true;
     setIsLoading(true);
@@ -152,6 +159,11 @@ export default function LoginPage() {
   const handleVerifyStaffTotp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!staffSetupData) return;
+    if (!staffSetupData.challengeToken) {
+      showError('Your setup session expired. Please log in again.');
+      resetLoginFlow();
+      return;
+    }
     if (otpSubmitInFlightRef.current) return;
     otpSubmitInFlightRef.current = true;
     setIsLoading(true);

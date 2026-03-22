@@ -8,6 +8,16 @@ const STUDENT_GOV_POSITION_LIMITS = Object.freeze({
   Senators: 12,
 });
 
+const isAutoManagedElectionStatus = (status) => ['upcoming', 'active', 'closed'].includes(status);
+
+const computeTimedElectionStatus = (startDate, endDate, now = new Date()) => {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  if (now < start) return 'upcoming';
+  if (now >= start && now <= end) return 'active';
+  return 'closed';
+};
+
 const resolvePositionVoteLimit = async ({ electionId, positionId, legacyPosition }) => {
   if (positionId) {
     const { data: positionRule, error } = await supabase
@@ -43,12 +53,24 @@ export const submitVote = async (req, res) => {
   // Check election is active
   const { data: election, error: electionError } = await supabase
     .from('elections')
-    .select('status, type')
+    .select('id, status, type, start_date, end_date')
     .eq('id', electionId)
     .single();
 
   if (electionError || !election) return res.status(404).json({ error: 'Election not found.' });
-  if (election.status !== 'active') return res.status(400).json({ error: 'Election is not active.' });
+
+  const effectiveStatus = isAutoManagedElectionStatus(election.status)
+    ? computeTimedElectionStatus(election.start_date, election.end_date)
+    : election.status;
+
+  if (effectiveStatus !== election.status) {
+    await supabase
+      .from('elections')
+      .update({ status: effectiveStatus, updated_at: new Date().toISOString() })
+      .eq('id', election.id);
+  }
+
+  if (effectiveStatus !== 'active') return res.status(400).json({ error: 'Election is not active.' });
 
   const { data: candidate, error: candidateError } = await supabase
     .from('candidates')
@@ -106,7 +128,7 @@ export const submitVote = async (req, res) => {
     });
   }
 
-  const voteHash = generateVoteHash(req.user.id, electionId, candidateId, position);
+  const voteHash = generateVoteHash(req.user.id, electionId, candidateId, effectivePosition);
 
   const { data, error } = await supabase
     .from('votes')

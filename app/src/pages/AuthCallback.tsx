@@ -65,6 +65,22 @@ export default function AuthCallback() {
 
   const normalizeTotpCode = (input: string) => String(input ?? '').trim().replace(/\s+/g, '').replace(/\D/g, '').slice(0, 6);
 
+  const restartGoogleSignIn = async () => {
+    try {
+      await supabase.auth.signOut({ scope: 'local' });
+      await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+          queryParams: { access_type: 'offline', prompt: 'select_account' },
+        },
+      });
+    } catch {
+      setError('Could not restart Google sign-in. Please return to login and try again.');
+      setPhase('error');
+    }
+  };
+
   // ── On mount: listen for the Supabase OAuth session then hand off to backend
   useEffect(() => {
     let done = false;
@@ -150,6 +166,11 @@ export default function AuthCallback() {
   // ── Returning user: verify TOTP ───────────────────────────────────────────
   const handleVerifyTotp = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!challengeToken) {
+      showError('Your verification session expired. Please sign in with Google again.');
+      setPhase('error');
+      return;
+    }
     if (otpSubmitInFlightRef.current) return;
     otpSubmitInFlightRef.current = true;
     setIsLoading(true);
@@ -158,9 +179,12 @@ export default function AuthCallback() {
         '/api/auth/verify-totp',
         { challengeToken, totpCode: normalizeTotpCode(totpCode) }
       );
+      await supabase.auth.setSession({
+        access_token: data.accessToken,
+        refresh_token: data.refreshToken,
+      }).catch(() => null);
       setToken(data.accessToken, data.refreshToken);
       setUserFromCallback(camelize<User>(data.user));
-      await supabase.auth.signOut({ scope: 'local' });
       showSuccess('Signed in with Google!');
       navigate('/dashboard', { replace: true });
     } catch (err) {
@@ -175,6 +199,11 @@ export default function AuthCallback() {
   // ── New / setup user: complete profile + TOTP activation ─────────────────
   const handleCompleteSetup = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!challengeToken) {
+      showError('Your setup session expired. Please sign in with Google again.');
+      setPhase('error');
+      return;
+    }
     if (!setupTotpCode || setupTotpCode.length !== 6) return;
     if (otpSubmitInFlightRef.current) return;
 
@@ -189,9 +218,12 @@ export default function AuthCallback() {
           totpCode: normalizeTotpCode(setupTotpCode),
         }
       );
+      await supabase.auth.setSession({
+        access_token: data.accessToken,
+        refresh_token: data.refreshToken,
+      }).catch(() => null);
       setToken(data.accessToken, data.refreshToken);
       setUserFromCallback(camelize<User>(data.user));
-      await supabase.auth.signOut({ scope: 'local' });
       showSuccess('Account activated! Welcome to SchoolVote.');
       navigate('/dashboard', { replace: true });
     } catch (err) {
@@ -246,15 +278,7 @@ export default function AuthCallback() {
                 <CardContent className="flex flex-col gap-2">
                   <Button
                     className="touch-target w-full bg-[#295acc] hover:bg-[#1e4db3]"
-                    onClick={() =>
-                      supabase.auth.signInWithOAuth({
-                        provider: 'google',
-                        options: {
-                          redirectTo: `${window.location.origin}/auth/callback`,
-                          queryParams: { access_type: 'offline', prompt: 'select_account' },
-                        },
-                      })
-                    }
+                    onClick={() => void restartGoogleSignIn()}
                   >
                     Try Again with Google
                   </Button>

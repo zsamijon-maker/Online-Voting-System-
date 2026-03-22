@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Crown,
   Star,
@@ -21,6 +21,7 @@ import {
 } from '@/services/pageantService';
 import type { Pageant, Contestant, Criteria, Score, User } from '@/types';
 import { formatDate, formatDateTime, formatPageantStatus } from '@/utils/formatters';
+import { useSupabaseProfile, DEFAULT_PROFILE_AVATAR } from '@/hooks/useSupabaseProfile';
 import {
   Dialog,
   DialogContent,
@@ -50,13 +51,7 @@ export default function JudgeDashboard() {
   const [submittedScores, setSubmittedScores] = useState<Score[]>([]);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
 
-  useEffect(() => {
-    if (user) {
-      fetchData();
-    }
-  }, [user]);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     if (user) {
       const judgePageants = await getJudgePageants(user.id);
       setPageants(judgePageants);
@@ -76,7 +71,14 @@ export default function JudgeDashboard() {
       );
       setSubmittedScores(allScores);
     }
-  };
+  }, [user]);
+
+  useEffect(() => {
+    if (user) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      void fetchData();
+    }
+  }, [user, fetchData]);
 
   const handleSelectContestant = (contestant: Contestant) => {
     setSelectedContestant(contestant);
@@ -903,6 +905,11 @@ function ScoringHistory({
 // JUDGE PROFILE
 // ============================================
 function JudgeProfile({ user }: { user: User }) {
+  const { profile, isLoading } = useSupabaseProfile();
+  const displayName = profile?.name || `${user.firstName} ${user.lastName}`.trim() || 'User';
+  const displayEmail = profile?.email || user.email || 'No email available';
+  const displayAvatar = profile?.avatarUrl || user.photoUrl || user.photoPath || DEFAULT_PROFILE_AVATAR;
+
   return (
     <div className="max-w-2xl">
       <Card>
@@ -911,34 +918,49 @@ function JudgeProfile({ user }: { user: User }) {
           <CardDescription>Your judge account information</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="flex items-center gap-4">
-            <div className="w-20 h-20 rounded-full bg-[#1E3A8A] flex items-center justify-center text-white text-2xl font-bold">
-              {user.firstName[0]}{user.lastName[0]}
+          {isLoading ? (
+            <div className="flex items-center gap-4" aria-busy="true" aria-live="polite">
+              <div className="w-20 h-20 rounded-full bg-gray-200 animate-pulse" />
+              <div className="space-y-2">
+                <div className="h-5 w-40 bg-gray-200 rounded animate-pulse" />
+                <div className="h-4 w-52 bg-gray-200 rounded animate-pulse" />
+              </div>
             </div>
-            <div>
-              <h3 className="text-xl font-semibold text-gray-900">
-                {user.firstName} {user.lastName}
-              </h3>
-              <p className="text-gray-500">{user.email}</p>
-              <Badge className="mt-2 bg-[#1E3A8A]/10 text-[#1E3A8A] border border-[#1E3A8A]/20">
-                <Star className="w-3 h-3 mr-1" />
-                Judge
-              </Badge>
+          ) : (
+            <div className="flex items-center gap-4">
+              <div className="w-20 h-20 rounded-full bg-[#1E3A8A] overflow-hidden flex items-center justify-center text-white text-2xl font-bold">
+                <img
+                  src={displayAvatar}
+                  alt="Profile"
+                  className="w-full h-full object-cover"
+                  onError={(e) => {
+                    e.currentTarget.src = DEFAULT_PROFILE_AVATAR;
+                  }}
+                />
+              </div>
+              <div>
+                <h3 className="text-xl font-semibold text-gray-900">{displayName}</h3>
+                <p className="text-gray-500">{displayEmail}</p>
+                <Badge className="mt-2 bg-[#1E3A8A]/10 text-[#1E3A8A] border border-[#1E3A8A]/20">
+                  <Star className="w-3 h-3 mr-1" />
+                  Judge
+                </Badge>
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="grid grid-cols-1 gap-4 pt-4 border-t border-gray-100 sm:grid-cols-2">
             <div>
               <ProfileLabel>First Name</ProfileLabel>
-              <p className="text-sm text-gray-900 mt-1">{user.firstName}</p>
+              <p className="text-sm text-gray-900 mt-1">{profile ? displayName.split(/\s+/)[0] || 'User' : user.firstName || 'User'}</p>
             </div>
             <div>
               <ProfileLabel>Last Name</ProfileLabel>
-              <p className="text-sm text-gray-900 mt-1">{user.lastName}</p>
+              <p className="text-sm text-gray-900 mt-1">{profile ? displayName.split(/\s+/).slice(1).join(' ') || 'N/A' : user.lastName || 'N/A'}</p>
             </div>
             <div>
               <ProfileLabel>Email</ProfileLabel>
-              <p className="text-sm text-gray-900 mt-1">{user.email}</p>
+              <p className="text-sm text-gray-900 mt-1">{displayEmail}</p>
             </div>
             <div>
               <ProfileLabel>Account Status</ProfileLabel>

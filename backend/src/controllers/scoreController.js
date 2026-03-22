@@ -2,6 +2,20 @@ import { supabase } from '../lib/supabaseClient.js';
 import crypto from 'crypto';
 import { hasRole, assertRole } from '../lib/roleUtils.js';
 
+const isAutoManagedPageantStatus = (status) => ['upcoming', 'active', 'completed'].includes(status);
+
+const determinePageantStatus = (eventDate, nowInput = new Date()) => {
+  const now = new Date(nowInput);
+  const event = new Date(eventDate);
+
+  now.setHours(0, 0, 0, 0);
+  event.setHours(0, 0, 0, 0);
+
+  if (now < event) return 'upcoming';
+  if (now.getTime() === event.getTime()) return 'active';
+  return 'completed';
+};
+
 const generateScoreHash = (judgeId, contestantId, criteriaId, score) => {
   return crypto
     .createHash('sha256')
@@ -18,6 +32,31 @@ export const submitScores = async (req, res) => {
 
   if (!pageantId || !contestantId || !Array.isArray(scores) || scores.length === 0) {
     return res.status(400).json({ error: 'pageantId, contestantId, and scores array are required.' });
+  }
+
+  const { data: pageant, error: pageantError } = await supabase
+    .from('pageants')
+    .select('id, status, event_date')
+    .eq('id', pageantId)
+    .single();
+
+  if (pageantError || !pageant) {
+    return res.status(404).json({ error: 'Pageant not found.' });
+  }
+
+  const effectiveStatus = isAutoManagedPageantStatus(pageant.status)
+    ? determinePageantStatus(pageant.event_date)
+    : pageant.status;
+
+  if (effectiveStatus !== pageant.status) {
+    await supabase
+      .from('pageants')
+      .update({ status: effectiveStatus, updated_at: new Date().toISOString() })
+      .eq('id', pageant.id);
+  }
+
+  if (effectiveStatus !== 'active') {
+    return res.status(400).json({ error: 'Pageant is not active for scoring.' });
   }
 
   // Verify judge is assigned to this pageant

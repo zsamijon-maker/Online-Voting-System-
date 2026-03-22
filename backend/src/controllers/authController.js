@@ -1,20 +1,95 @@
 import { generateSecret, generateURI, generate as generateTotp, verify as verifyTotp } from 'otplib';
+import { randomUUID } from 'crypto';
 import jwt from 'jsonwebtoken';
 import { supabase } from '../lib/supabaseClient.js';
 
 // ── Challenge-token config ─────────────────────────────────────────────────
 // Add CHALLENGE_JWT_SECRET to your .env — use a long random string.
 const CHALLENGE_SECRET = process.env.CHALLENGE_JWT_SECRET || 'change-this-secret';
-const CHALLENGE_EXPIRY  = '5m'; // user has 5 minutes to complete each step
+const CHALLENGE_EXPIRY  = process.env.CHALLENGE_EXPIRY || '10m'; // allow realistic user/device latency
+const MAX_CHALLENGE_ATTEMPTS = Number(process.env.MAX_2FA_ATTEMPTS || 5);
 
-const signChallenge   = (payload) => jwt.sign(payload, CHALLENGE_SECRET, { expiresIn: CHALLENGE_EXPIRY });
+// Challenge lifecycle guards (single-node process scope).
+const latestChallengeByUser = new Map();
+const consumedChallengeIds = new Set();
+const challengeAttemptsById = new Map();
+
+function logAuthEvent(event, details = {}) {
+  console.info(`[auth] ${event}`, details);
+}
+
 const verifyChallenge = (token)   => jwt.verify(token, CHALLENGE_SECRET);
+
+function issueChallenge(payload, { trackLatest = true } = {}) {
+  const cid = randomUUID();
+  const token = jwt.sign({ ...payload, cid }, CHALLENGE_SECRET, { expiresIn: CHALLENGE_EXPIRY });
+  if (trackLatest && payload?.sub) {
+    latestChallengeByUser.set(payload.sub, cid);
+  }
+  challengeAttemptsById.set(cid, 0);
+  logAuthEvent('challenge_issued', { sub: payload?.sub, purpose: payload?.purpose, cid });
+  return token;
+}
+
+function retireChallenge(payload) {
+  if (!payload?.cid) return;
+  consumedChallengeIds.add(payload.cid);
+  challengeAttemptsById.delete(payload.cid);
+  if (payload?.sub && latestChallengeByUser.get(payload.sub) === payload.cid) {
+    latestChallengeByUser.delete(payload.sub);
+  }
+}
+
+function validateChallengeState(payload, { enforceLatest = true, countAttempt = false } = {}) {
+  if (!payload?.cid) {
+    return { ok: false, status: 401, error: 'Invalid challenge token.' };
+  }
+
+  if (consumedChallengeIds.has(payload.cid)) {
+    logAuthEvent('challenge_rejected_consumed', { sub: payload?.sub, cid: payload?.cid });
+    return {
+      ok: false,
+      status: 401,
+      error: 'This verification session is no longer valid. Please sign in again.',
+    };
+  }
+
+  if (enforceLatest && payload?.sub) {
+    const latestCid = latestChallengeByUser.get(payload.sub);
+    if (latestCid && latestCid !== payload.cid) {
+      logAuthEvent('challenge_rejected_superseded', { sub: payload?.sub, cid: payload?.cid, latestCid });
+      return {
+        ok: false,
+        status: 401,
+        error: 'A newer verification session was started. Please use the latest code prompt.',
+      };
+    }
+  }
+
+  if (countAttempt) {
+    const nextAttempts = (challengeAttemptsById.get(payload.cid) || 0) + 1;
+    challengeAttemptsById.set(payload.cid, nextAttempts);
+    if (nextAttempts > MAX_CHALLENGE_ATTEMPTS) {
+      retireChallenge(payload);
+      logAuthEvent('challenge_locked_too_many_attempts', { sub: payload?.sub, cid: payload?.cid });
+      return {
+        ok: false,
+        status: 429,
+        error: 'Too many verification attempts. Please sign in again.',
+      };
+    }
+  }
+
+  return { ok: true };
+}
 
 function readChallengeToken(token) {
   try {
     return { payload: verifyChallenge(token), expired: false, invalid: false };
   } catch (error) {
     if (error?.name === 'TokenExpiredError') {
+      const decoded = jwt.decode(token);
+      if (decoded?.cid) retireChallenge(decoded);
       return { payload: null, expired: true, invalid: false };
     }
     return { payload: null, expired: false, invalid: true };
@@ -173,7 +248,7 @@ export const register = async (req, res) => {
   }
 
   // ── Issue short-lived setup challenge token ───────────────────────────────
-  const challengeToken = signChallenge({ sub: authData.user.id, purpose: 'totp_setup' });
+  const challengeToken = issueChallenge({ sub: authData.user.id, purpose: 'totp_setup' });
 
   // ── Build otpauth:// URI (frontend renders the QR code from this) ─────────
   const otpauthUrl = generateURI({ label: email.toLowerCase(), issuer: 'SchoolVoting', secret: totpSecret });
@@ -220,11 +295,18 @@ export const verifyRegistrationTotp = async (req, res) => {
     return res.status(401).json({ error: 'Invalid challenge token.' });
   }
 
-  const { data: user, error: userError } = await supabase
-    .from('users')
-    .select('id, totp_secret, two_factor_enabled')
-    .eq('id', payload.sub)
-    .single();
+  const challengeState = validateChallengeState(payload, { enforceLatest: true, countAttempt: true });
+  if (!challengeState.ok) {
+    return res.status(challengeState.status).json({ error: challengeState.error });
+  }
+
+  const { data: user, error: userError } = await withRetry(() =>
+    supabase
+      .from('users')
+      .select('id, totp_secret, two_factor_enabled')
+      .eq('id', payload.sub)
+      .single()
+  );
 
   if (userError || !user) {
     return res.status(404).json({ error: 'User not found.' });
@@ -237,17 +319,23 @@ export const verifyRegistrationTotp = async (req, res) => {
   const isValid = verifyTotpCode({ token: normalizedTotpCode, secret: user.totp_secret });
 
   if (!isValid) {
+    logAuthEvent('totp_verify_failed', { sub: payload?.sub, purpose: payload?.purpose, cid: payload?.cid });
     return res.status(400).json({
       error: 'Invalid or expired code. Please try again with the current code from your authenticator app.',
     });
   }
 
-  const { error: updateError } = await supabase
-    .from('users')
-    .update({ two_factor_enabled: true })
-    .eq('id', user.id);
+  const { error: updateError } = await withRetry(() =>
+    supabase
+      .from('users')
+      .update({ two_factor_enabled: true })
+      .eq('id', user.id)
+  );
 
   if (updateError) throw updateError;
+
+  retireChallenge(payload);
+  logAuthEvent('totp_verify_success', { sub: payload?.sub, purpose: payload?.purpose, cid: payload?.cid });
 
   res.json({ message: 'Two-factor authentication activated. You can now log in.' });
 };
@@ -296,7 +384,7 @@ export const login = async (req, res) => {
       const totpSecret = generateSecret();
       await supabase.from('users').update({ totp_secret: totpSecret }).eq('id', userRow.id);
 
-      const challengeToken = signChallenge({
+      const challengeToken = issueChallenge({
         sub:          data.user.id,
         purpose:      'staff_totp_setup',
         accessToken:  data.session.access_token,
@@ -327,7 +415,7 @@ export const login = async (req, res) => {
 
   // Pack the Supabase session tokens inside the signed challenge JWT.
   // They are only handed to the client after TOTP is verified in Step 2.
-  const challengeToken = signChallenge({
+  const challengeToken = issueChallenge({
     sub:          data.user.id,
     purpose:      'totp_login',
     accessToken:  data.session.access_token,
@@ -368,11 +456,18 @@ export const verifyLoginTotp = async (req, res) => {
     return res.status(401).json({ error: 'Invalid challenge token.' });
   }
 
-  const { data: userRow, error: userError } = await supabase
-    .from('users')
-    .select('*')
-    .eq('id', payload.sub)
-    .single();
+  const challengeState = validateChallengeState(payload, { enforceLatest: true, countAttempt: true });
+  if (!challengeState.ok) {
+    return res.status(challengeState.status).json({ error: challengeState.error });
+  }
+
+  const { data: userRow, error: userError } = await withRetry(() =>
+    supabase
+      .from('users')
+      .select('*')
+      .eq('id', payload.sub)
+      .single()
+  );
 
   if (userError || !userRow) {
     return res.status(404).json({ error: 'User not found.' });
@@ -381,15 +476,21 @@ export const verifyLoginTotp = async (req, res) => {
   const isValid = verifyTotpCode({ token: normalizedTotpCode, secret: userRow.totp_secret });
 
   if (!isValid) {
+    logAuthEvent('totp_verify_failed', { sub: payload?.sub, purpose: payload?.purpose, cid: payload?.cid });
     return res.status(400).json({
       error: 'Invalid verification code. Please try again with the current code from your authenticator app.',
     });
   }
 
-  await supabase
-    .from('users')
-    .update({ last_login: new Date().toISOString() })
-    .eq('id', userRow.id);
+  await withRetry(() =>
+    supabase
+      .from('users')
+      .update({ last_login: new Date().toISOString() })
+      .eq('id', userRow.id)
+  );
+
+  retireChallenge(payload);
+  logAuthEvent('totp_verify_success', { sub: payload?.sub, purpose: payload?.purpose, cid: payload?.cid });
 
   // Strip the TOTP secret before sending user data to the client
   const { totp_secret: _secret, ...safeUser } = userRow;
@@ -520,7 +621,7 @@ export const googleCallback = async (req, res) => {
 
     if (userRow.two_factor_enabled) {
       // Pack session into challenge JWT — same flow as email/password login
-      const challengeToken = signChallenge({
+      const challengeToken = issueChallenge({
         sub:          user.id,
         purpose:      'totp_login',
         accessToken,
@@ -535,7 +636,7 @@ export const googleCallback = async (req, res) => {
       await supabase.from('users').update({ totp_secret: totpSecret }).eq('id', user.id);
     }
     const otpauthUrl = generateURI({ label: email, issuer: 'SchoolVoting', secret: totpSecret });
-    const challengeToken = signChallenge({
+    const challengeToken = issueChallenge({
       sub: user.id, purpose: 'google_totp_setup', accessToken, refreshToken, totpSecret,
     });
     return res.json({ status: 'totp_setup', challengeToken, otpauthUrl, secretKey: totpSecret });
@@ -553,7 +654,7 @@ export const googleCallback = async (req, res) => {
 
   // TOTP secret + session tokens are stored inside the signed challenge JWT
   // (not in the DB yet — profile is only created after TOTP is verified)
-  const challengeToken = signChallenge({
+  const challengeToken = issueChallenge({
     sub: user.id, purpose: 'google_new_user',
     accessToken, refreshToken, totpSecret, email, firstName, lastName,
   });
@@ -593,6 +694,11 @@ export const googleSetup = async (req, res) => {
     return res.status(401).json({ error: 'Invalid challenge token.' });
   }
 
+  const challengeState = validateChallengeState(payload, { enforceLatest: true, countAttempt: true });
+  if (!challengeState.ok) {
+    return res.status(challengeState.status).json({ error: challengeState.error });
+  }
+
   // ── New user: school ID is required ───────────────────────────────────────
   if (payload.purpose === 'google_new_user') {
     if (!studentId) {
@@ -619,6 +725,7 @@ export const googleSetup = async (req, res) => {
   // ── Verify TOTP code against secret stored in the challenge JWT ───────────
   const isValid = verifyTotpCode({ token: normalizedTotpCode, secret: payload.totpSecret });
   if (!isValid) {
+    logAuthEvent('totp_verify_failed', { sub: payload?.sub, purpose: payload?.purpose, cid: payload?.cid });
     return res.status(400).json({
       error: 'Invalid code. Please enter the current code from your authenticator app.',
     });
@@ -673,6 +780,9 @@ export const googleSetup = async (req, res) => {
 
   const { totp_secret: _secret, ...safeUser } = userRow;
 
+  retireChallenge(payload);
+  logAuthEvent('totp_verify_success', { sub: payload?.sub, purpose: payload?.purpose, cid: payload?.cid });
+
   return res.json({
     accessToken:  payload.accessToken,
     refreshToken: payload.refreshToken,
@@ -713,11 +823,18 @@ export const setupStaffTotp = async (req, res) => {
     return res.status(401).json({ error: 'Invalid challenge token.' });
   }
 
-  const { data: userRow, error: userError } = await supabase
-    .from('users')
-    .select('*')
-    .eq('id', payload.sub)
-    .single();
+  const challengeState = validateChallengeState(payload, { enforceLatest: true, countAttempt: true });
+  if (!challengeState.ok) {
+    return res.status(challengeState.status).json({ error: challengeState.error });
+  }
+
+  const { data: userRow, error: userError } = await withRetry(() =>
+    supabase
+      .from('users')
+      .select('*')
+      .eq('id', payload.sub)
+      .single()
+  );
 
   if (userError || !userRow) {
     return res.status(404).json({ error: 'User not found.' });
@@ -726,17 +843,23 @@ export const setupStaffTotp = async (req, res) => {
   const isValid = verifyTotpCode({ token: normalizedTotpCode, secret: userRow.totp_secret });
 
   if (!isValid) {
+    logAuthEvent('totp_verify_failed', { sub: payload?.sub, purpose: payload?.purpose, cid: payload?.cid });
     return res.status(400).json({
       error: 'Invalid verification code. Please try again with the current code from your authenticator app.',
     });
   }
 
-  const { error: updateError } = await supabase
-    .from('users')
-    .update({ two_factor_enabled: true, last_login: new Date().toISOString() })
-    .eq('id', userRow.id);
+  const { error: updateError } = await withRetry(() =>
+    supabase
+      .from('users')
+      .update({ two_factor_enabled: true, last_login: new Date().toISOString() })
+      .eq('id', userRow.id)
+  );
 
   if (updateError) throw updateError;
+
+  retireChallenge(payload);
+  logAuthEvent('totp_verify_success', { sub: payload?.sub, purpose: payload?.purpose, cid: payload?.cid });
 
   const { totp_secret: _secret, ...safeUser } = { ...userRow, two_factor_enabled: true };
 
