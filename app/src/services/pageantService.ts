@@ -1,6 +1,6 @@
 import type {
   Pageant, Contestant, Criteria, PageantJudge, Score, PageantResult,
-  PageantFormData, ContestantFormData, CriteriaFormData, ScoreFormData, User,
+  PageantFormData, ContestantFormData, CriteriaFormData, ScoreFormData, User, PageantResultsResponse,
 } from '@/types';
 import { api, camelize } from '@/lib/api';
 
@@ -93,6 +93,7 @@ export async function addContestant(pageantId: string, contestantData: Contestan
     form.append('bio', contestantData.bio ?? '');
     form.append('age', contestantData.age ? String(contestantData.age) : '');
     form.append('department', contestantData.department ?? '');
+    form.append('gender', contestantData.gender ?? '');
     form.append('photoUrl', contestantData.photoUrl ?? '');
     form.append('image', contestantData.imageFile);
 
@@ -114,6 +115,7 @@ export async function updateContestant(id: string, pageantId: string, updates: P
       if (updates.bio !== undefined) form.append('bio', updates.bio ?? '');
       if (updates.age !== undefined) form.append('age', updates.age ? String(updates.age) : '');
       if (updates.department !== undefined) form.append('department', updates.department ?? '');
+      if (updates.gender !== undefined) form.append('gender', updates.gender ?? '');
       if (updates.photoUrl !== undefined) form.append('photoUrl', updates.photoUrl ?? '');
       if (updates.isActive !== undefined) form.append('isActive', String(updates.isActive));
       form.append('image', updates.imageFile);
@@ -196,9 +198,13 @@ export async function removeJudgeAssignment(pageantId: string, judgeId: string):
 
 // -- Scores --
 
-export async function getJudgeScores(pageantId: string, contestantId: string, _judgeId: string): Promise<Score[]> {
+export async function getMyScoresByPageant(pageantId: string): Promise<Score[]> {
   const data = await api.get<unknown[]>(`/api/scores/pageants/${pageantId}/my-scores`);
-  const all = camelize<Score[]>(data);
+  return camelize<Score[]>(data);
+}
+
+export async function getJudgeScores(pageantId: string, contestantId: string, _judgeId: string): Promise<Score[]> {
+  const all = await getMyScoresByPageant(pageantId);
   return all.filter(s => s.contestantId === contestantId);
 }
 
@@ -224,17 +230,30 @@ export async function hasJudgeScoredContestant(pageantId: string, contestantId: 
 
 // -- Results --
 
-export async function getPageantResults(pageantId: string): Promise<PageantResult[]> {
-  const data = await api.get<unknown[]>(`/api/scores/pageants/${pageantId}/results`);
-  return camelize<PageantResult[]>(data);
+export async function getPageantResults(
+  pageantId: string,
+  tieBreaker?: 'weighted_criteria' | 'judge_priority' | 'keep_tied'
+): Promise<PageantResultsResponse> {
+  const query = tieBreaker ? `?tieBreaker=${encodeURIComponent(tieBreaker)}` : '';
+  const data = await api.get<unknown>(`/api/scores/pageants/${pageantId}/results${query}`);
+  return camelize<PageantResultsResponse>(data);
 }
 
 export async function getPageantWinner(pageantId: string): Promise<PageantResult | null> {
   const results = await getPageantResults(pageantId);
-  return results.length > 0 ? results[0] : null;
+  if (Array.isArray(results)) {
+    return results.length > 0 ? results[0] : null;
+  }
+
+  return results.maleWinner ?? results.femaleWinner ?? null;
 }
 
 export async function getContestantRank(pageantId: string, contestantId: string): Promise<number> {
   const results = await getPageantResults(pageantId);
-  return results.find(r => r.contestantId === contestantId)?.rank || 0;
+  if (Array.isArray(results)) {
+    return results.find(r => r.contestantId === contestantId)?.rank || 0;
+  }
+
+  const combined = [...results.maleResults, ...results.femaleResults];
+  return combined.find(r => r.contestantId === contestantId)?.rank || 0;
 }

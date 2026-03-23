@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import {
   Users,
@@ -78,14 +78,31 @@ export default function ElectionCommitteeDashboard() {
   const [results, setResults] = useState<ElectionResult[]>([]);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
 
-  useEffect(() => {
-    fetchElections();
-  }, []);
-
-  const fetchElections = async () => {
+  const fetchElections = useCallback(async () => {
     const allElections = await getAllElections();
     setElections(allElections);
-  };
+  }, []);
+
+  useEffect(() => {
+    Promise.resolve().then(() => {
+      void fetchElections();
+    });
+  }, [fetchElections]);
+
+  useEffect(() => {
+    Promise.resolve().then(() => {
+      void fetchElections();
+    });
+  }, [activeTab, fetchElections]);
+
+  useEffect(() => {
+    const handleFocus = () => {
+      void fetchElections();
+    };
+
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [fetchElections]);
 
   const handleCreateElection = async (data: ElectionFormData) => {
     if (user) {
@@ -882,6 +899,20 @@ const STUDENT_GOVERNMENT_POSITIONS = [
   { name: 'Senators', maxVote: 12 },
 ];
 
+const toLocalDateTimeInputValue = (value?: string) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const offset = date.getTimezoneOffset() * 60 * 1000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+};
+
+const toIsoFromDateTimeLocal = (value: string) => {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toISOString();
+};
+
 function ElectionForm({
   election,
   onSubmit,
@@ -896,8 +927,8 @@ function ElectionForm({
     title: election?.title || '',
     description: election?.description || '',
     type: election?.type || 'student_government',
-    startDate: election?.startDate ? election.startDate.slice(0, 16) : '',
-    endDate: election?.endDate ? election.endDate.slice(0, 16) : '',
+    startDate: toLocalDateTimeInputValue(election?.startDate),
+    endDate: toLocalDateTimeInputValue(election?.endDate),
     allowWriteIns: election?.allowWriteIns || false,
     maxVotesPerVoter: election?.maxVotesPerVoter || 1,
     resultsPublic: election?.resultsPublic || false,
@@ -908,7 +939,11 @@ function ElectionForm({
     e.preventDefault();
     if (!isSubmitting) {
       setIsSubmitting(true);
-      onSubmit(formData);
+      onSubmit({
+        ...formData,
+        startDate: toIsoFromDateTimeLocal(formData.startDate),
+        endDate: toIsoFromDateTimeLocal(formData.endDate),
+      });
       // Reset after a small delay (the parent will close the modal on success)
       setTimeout(() => setIsSubmitting(false), 1000);
     }

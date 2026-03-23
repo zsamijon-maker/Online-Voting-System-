@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabaseClient.js';
 import { isAdmin, assertRole } from '../lib/roleUtils.js';
+import { writeAuditLog } from '../lib/auditLogger.js';
 
 const STUDENT_GOVERNMENT_POSITIONS = Object.freeze([
   { position_name: 'President', max_vote: 1 },
@@ -29,7 +30,8 @@ const createElectionPositions = async (electionId, type) => {
   return data ?? [];
 };
 
-const isAutoManagedElectionStatus = (status) => ['upcoming', 'active', 'closed'].includes(status);
+// Only transition time-window states automatically; keep terminal states stable once set manually.
+const isAutoManagedElectionStatus = (status) => ['upcoming', 'active'].includes(status);
 
 const computeTimedElectionStatus = (startDate, endDate, now = new Date()) => {
   const start = new Date(startDate);
@@ -163,6 +165,13 @@ export const createElection = async (req, res) => {
 
   try {
     const positions = await createElectionPositions(data.id, type);
+    await writeAuditLog({
+      req,
+      action: 'election_created',
+      entityType: 'election',
+      entityId: data.id,
+      newValues: data,
+    });
     res.status(201).json({ ...data, positions });
   } catch (positionError) {
     await supabase.from('elections').delete().eq('id', data.id);
@@ -186,19 +195,21 @@ export const updateElection = async (req, res) => {
   if (maxVotesPerVoter !== undefined) updates.max_votes_per_voter = maxVotesPerVoter;
   if (resultsPublic !== undefined) updates.results_public = resultsPublic;
 
-  // If either startDate or endDate is being updated, fetch the current election to recalculate status
+  const { data: currentElection, error: currentElectionError } = await supabase
+    .from('elections')
+    .select('*')
+    .eq('id', req.params.id)
+    .single();
+
+  if (currentElectionError || !currentElection) {
+    return res.status(404).json({ error: 'Election not found.' });
+  }
+
+  // If either startDate or endDate is being updated, recalculate status.
   if (startDate !== undefined || endDate !== undefined) {
-    const { data: currentElection } = await supabase
-      .from('elections')
-      .select('start_date, end_date')
-      .eq('id', req.params.id)
-      .single();
-    
-    if (currentElection) {
-      const finalStartDate = startDate || currentElection.start_date;
-      const finalEndDate = endDate || currentElection.end_date;
-      updates.status = determineStatus(finalStartDate, finalEndDate);
-    }
+    const finalStartDate = startDate || currentElection.start_date;
+    const finalEndDate = endDate || currentElection.end_date;
+    updates.status = determineStatus(finalStartDate, finalEndDate);
   }
 
   const { data, error } = await supabase
@@ -209,6 +220,16 @@ export const updateElection = async (req, res) => {
     .single();
 
   if (error) throw error;
+
+  await writeAuditLog({
+    req,
+    action: 'election_updated',
+    entityType: 'election',
+    entityId: data.id,
+    oldValues: currentElection,
+    newValues: data,
+  });
+
   res.json(data);
 };
 
@@ -228,6 +249,16 @@ export const updateElectionStatus = async (req, res) => {
     return res.status(403).json({ error: 'Only admins can archive an election.' });
   }
 
+  const { data: currentElection, error: currentElectionError } = await supabase
+    .from('elections')
+    .select('*')
+    .eq('id', req.params.id)
+    .single();
+
+  if (currentElectionError || !currentElection) {
+    return res.status(404).json({ error: 'Election not found.' });
+  }
+
   const { data, error } = await supabase
     .from('elections')
     .update({ status, updated_at: new Date().toISOString() })
@@ -236,6 +267,16 @@ export const updateElectionStatus = async (req, res) => {
     .single();
 
   if (error) throw error;
+
+  await writeAuditLog({
+    req,
+    action: 'election_status_updated',
+    entityType: 'election',
+    entityId: data.id,
+    oldValues: { status: currentElection.status },
+    newValues: { status: data.status },
+  });
+
   res.json(data);
 };
 
@@ -247,7 +288,7 @@ export const deleteElection = async (req, res) => {
   // Only the creator or an admin may delete the election.
   const { data: election, error: fetchError } = await supabase
     .from('elections')
-    .select('created_by')
+    .select('*')
     .eq('id', req.params.id)
     .single();
 
@@ -259,5 +300,14 @@ export const deleteElection = async (req, res) => {
 
   const { error } = await supabase.from('elections').delete().eq('id', req.params.id);
   if (error) throw error;
+
+  await writeAuditLog({
+    req,
+    action: 'election_deleted',
+    entityType: 'election',
+    entityId: req.params.id,
+    oldValues: election,
+  });
+
   res.json({ message: 'Election deleted.' });
 };

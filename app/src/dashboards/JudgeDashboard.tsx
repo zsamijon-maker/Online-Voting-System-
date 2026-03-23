@@ -1,5 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
+  ResponsiveContainer,
+  BarChart as ReBarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  LabelList,
+} from 'recharts';
+import {
   Crown,
   Star,
   CheckCircle,
@@ -8,6 +18,7 @@ import {
   LogOut,
   Menu,
   X,
+  BarChart3,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNotification } from '@/contexts/NotificationContext';
@@ -15,11 +26,11 @@ import {
   getJudgePageants,
   getContestantsByPageant,
   getCriteriaByPageant,
-  hasJudgeScoredContestant,
-  getJudgeScores,
+  getMyScoresByPageant,
+  getPageantResults,
   submitScores,
 } from '@/services/pageantService';
-import type { Pageant, Contestant, Criteria, Score, User } from '@/types';
+import type { Pageant, Contestant, Criteria, Score, User, PageantResult, PageantResultsResponse } from '@/types';
 import { formatDate, formatDateTime, formatPageantStatus } from '@/utils/formatters';
 import { useSupabaseProfile, DEFAULT_PROFILE_AVATAR } from '@/hooks/useSupabaseProfile';
 import {
@@ -50,6 +61,9 @@ export default function JudgeDashboard() {
   const [isScoringModalOpen, setIsScoringModalOpen] = useState(false);
   const [submittedScores, setSubmittedScores] = useState<Score[]>([]);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+  const [selectedResultsPageant, setSelectedResultsPageant] = useState<Pageant | null>(null);
+  const [pageantResults, setPageantResults] = useState<PageantResultsResponse>([]);
+  const [loadingResults, setLoadingResults] = useState(false);
 
   const fetchData = useCallback(async () => {
     if (user) {
@@ -60,13 +74,8 @@ export default function JudgeDashboard() {
       const allScores: Score[] = [];
       await Promise.all(
         judgePageants.map(async (pageant) => {
-          const contestants = await getContestantsByPageant(pageant.id);
-          await Promise.all(
-            contestants.map(async (contestant) => {
-              const scores = await getJudgeScores(pageant.id, contestant.id, user!.id);
-              allScores.push(...scores);
-            })
-          );
+          const pageantScores = await getMyScoresByPageant(pageant.id);
+          allScores.push(...pageantScores);
         })
       );
       setSubmittedScores(allScores);
@@ -75,9 +84,25 @@ export default function JudgeDashboard() {
 
   useEffect(() => {
     if (user) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       void fetchData();
     }
+  }, [user, fetchData]);
+
+  useEffect(() => {
+    if (!user) return;
+    Promise.resolve().then(() => {
+      void fetchData();
+    });
+  }, [activeTab, user, fetchData]);
+
+  useEffect(() => {
+    const handleFocus = () => {
+      if (!user) return;
+      void fetchData();
+    };
+
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
   }, [user, fetchData]);
 
   const handleSelectContestant = (contestant: Contestant) => {
@@ -106,6 +131,22 @@ export default function JudgeDashboard() {
   const handleLogout = async () => {
     await logout();
     window.location.href = '/login';
+  };
+
+  const handleViewResults = async (pageant: Pageant) => {
+    setSelectedResultsPageant(pageant);
+    setLoadingResults(true);
+    try {
+      const results = await getPageantResults(pageant.id);
+      setPageantResults(results);
+    } finally {
+      setLoadingResults(false);
+    }
+  };
+
+  const handleBackToResultsList = () => {
+    setSelectedResultsPageant(null);
+    setPageantResults([]);
   };
 
   return (
@@ -168,6 +209,13 @@ export default function JudgeDashboard() {
               >
                 <CheckCircle className="w-4 h-4" />
                 My Scores
+              </TabsTrigger>
+              <TabsTrigger
+                value="results"
+                className="w-full min-w-0 justify-start gap-2 overflow-hidden whitespace-nowrap [&>svg]:shrink-0 rounded-md border border-transparent px-3 py-2 text-left text-gray-700 data-[state=active]:bg-[#1E3A8A] data-[state=active]:text-white data-[state=active]:border-[#1E3A8A]"
+              >
+                <BarChart3 className="w-4 h-4" />
+                Results
               </TabsTrigger>
               <TabsTrigger
                 value="profile"
@@ -237,6 +285,17 @@ export default function JudgeDashboard() {
 
             <TabsContent value="history">
               <ScoringHistory scores={submittedScores} pageants={pageants} />
+            </TabsContent>
+
+            <TabsContent value="results">
+              <JudgeResultsTab
+                pageants={pageants}
+                selectedPageant={selectedResultsPageant}
+                results={pageantResults}
+                loading={loadingResults}
+                onViewResults={handleViewResults}
+                onBack={handleBackToResultsList}
+              />
             </TabsContent>
 
             <TabsContent value="profile">
@@ -410,8 +469,351 @@ function JudgeOverviewTab({
             <CheckCircle className="w-4 h-4 mr-2" />
             My Scoring History
           </Button>
+          <Button variant="outline" className="touch-target w-full sm:w-auto" onClick={() => onNavigate('results')}>
+            <BarChart3 className="w-4 h-4 mr-2" />
+            View Results
+          </Button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ============================================
+// RESULTS TAB
+// ============================================
+function JudgeResultsTab({
+  pageants,
+  selectedPageant,
+  results,
+  loading,
+  onViewResults,
+  onBack,
+}: {
+  pageants: Pageant[];
+  selectedPageant: Pageant | null;
+  results: PageantResultsResponse;
+  loading: boolean;
+  onViewResults: (pageant: Pageant) => void;
+  onBack: () => void;
+}) {
+  if (selectedPageant) {
+    return (
+      <JudgeResultsView
+        pageant={selectedPageant}
+        results={results}
+        loading={loading}
+        onBack={onBack}
+      />
+    );
+  }
+
+  if (pageants.length === 0) {
+    return (
+      <div className="text-center py-12">
+        <BarChart3 className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+        <h3 className="text-lg font-medium text-gray-900">No Results Available</h3>
+        <p className="text-gray-500 mt-2">You are not assigned to any pageants.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <h3 className="text-lg font-semibold text-[#1E3A8A]">Assigned Pageant Results</h3>
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+        {pageants.map((pageant) => {
+          const statusLabel =
+            pageant.status === 'active'
+              ? 'Ongoing'
+              : pageant.status === 'completed'
+              ? 'Completed'
+              : pageant.status === 'upcoming'
+              ? 'Upcoming'
+              : pageant.status === 'draft'
+              ? 'Draft'
+              : pageant.status === 'archived'
+              ? 'Archived'
+              : 'Closed';
+
+          const statusClass =
+            pageant.status === 'active'
+              ? 'bg-green-100 text-green-800'
+              : pageant.status === 'completed'
+              ? 'bg-purple-100 text-purple-800'
+              : pageant.status === 'upcoming'
+              ? 'bg-blue-100 text-blue-800'
+              : 'bg-gray-100 text-gray-700';
+
+          return (
+            <Card key={pageant.id} className="border border-gray-200 shadow-sm">
+              <CardHeader>
+                <CardTitle className="text-lg leading-tight">{pageant.name}</CardTitle>
+                <CardDescription>{formatDate(pageant.eventDate)}</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <Badge className={statusClass}>{statusLabel}</Badge>
+                <div>
+                  <p className="text-xs text-gray-500">Scoring Method</p>
+                  <p className="text-sm font-medium text-gray-800">{formatScoringMethodLabel(pageant.scoringMethod)}</p>
+                </div>
+                <Button
+                  className="w-full rounded-md bg-[#1E3A8A] font-medium hover:bg-[#162d6b]"
+                  onClick={() => onViewResults(pageant)}
+                >
+                  <BarChart3 className="w-4 h-4 mr-2" />
+                  View Results
+                </Button>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function formatScoringMethodLabel(method: Pageant['scoringMethod']) {
+  if (method === 'average') return 'Average';
+  if (method === 'weighted') return 'Weighted Mean';
+  if (method === 'ranking_by_gender') return 'Ranking by Gender';
+  return 'Ranking';
+}
+
+function ordinal(value: number) {
+  const mod100 = value % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${value}th`;
+  const mod10 = value % 10;
+  if (mod10 === 1) return `${value}st`;
+  if (mod10 === 2) return `${value}nd`;
+  if (mod10 === 3) return `${value}rd`;
+  return `${value}th`;
+}
+
+function JudgeResultsView({
+  pageant,
+  results,
+  loading,
+  onBack,
+}: {
+  pageant: Pageant;
+  results: PageantResultsResponse;
+  loading: boolean;
+  onBack: () => void;
+}) {
+  if (loading) {
+    return <p className="text-sm text-gray-500">Loading results...</p>;
+  }
+
+  const isStandardResults = Array.isArray(results);
+  const flatResults = isStandardResults ? results : [...results.maleResults, ...results.femaleResults];
+
+  if (flatResults.length === 0) {
+    return (
+      <div className="space-y-4">
+        <Button variant="outline" size="sm" onClick={onBack}>← Back to Results</Button>
+        <p className="text-sm text-gray-500">No result records available yet for this pageant.</p>
+      </div>
+    );
+  }
+
+  const scoringMode =
+    isStandardResults
+      ? (results[0]?.scoringMode ||
+        (pageant.scoringMethod === 'average'
+          ? 'AVERAGE'
+          : pageant.scoringMethod === 'ranking'
+          ? 'RANKING'
+          : 'WEIGHTED_MEAN'))
+      : 'RANKING_BY_GENDER';
+
+  const renderFinalValue = (result: PageantResult) => {
+    if (scoringMode === 'AVERAGE') {
+      return `Final Score: ${(result.finalScore ?? result.totalScore).toFixed(2)} / 10`;
+    }
+
+    if (scoringMode === 'RANKING' || scoringMode === 'RANKING_BY_GENDER') {
+      return `Average Rank: ${(result.rankScore ?? result.totalScore).toFixed(2)} | Final Position: ${ordinal(result.rank)}`;
+    }
+
+    return `Final Percentage: ${(result.finalPercentage ?? result.weightedScore).toFixed(2)}% | Final Rating: ${(result.finalRating ?? result.totalScore).toFixed(2)} / 10`;
+  };
+
+  const renderRankingDivision = (title: string, divisionResults: PageantResult[], winnerLabel: string, winner: PageantResult | null) => (
+    <Card className="border border-gray-200 shadow-sm">
+      <CardHeader>
+        <div className="flex items-center justify-between gap-3">
+          <CardTitle className="text-lg">{title}</CardTitle>
+          <Badge className="bg-gray-100 text-gray-700">{divisionResults.length} contestant{divisionResults.length !== 1 ? 's' : ''}</Badge>
+        </div>
+        <CardDescription>
+          {winner ? `${winnerLabel}: ${winner.contestantName}` : 'No contestants in this category'}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {divisionResults.length === 0 ? (
+          <p className="text-sm text-gray-500">No contestants in this category.</p>
+        ) : (
+          <div className="overflow-x-auto rounded-md border border-gray-200">
+            <table className="w-full min-w-[620px] text-sm">
+              <thead className="bg-gray-50 text-gray-700">
+                <tr>
+                  <th className="px-3 py-2 text-left font-medium">Rank</th>
+                  <th className="px-3 py-2 text-left font-medium">Contestant</th>
+                  <th className="px-3 py-2 text-right font-medium">Average Rank</th>
+                  <th className="px-3 py-2 text-right font-medium">Judges</th>
+                </tr>
+              </thead>
+              <tbody>
+                {divisionResults.map((result) => (
+                  <tr key={result.contestantId} className="border-t border-gray-100">
+                    <td className="px-3 py-2 font-semibold text-gray-800">#{result.rank}</td>
+                    <td className="px-3 py-2 text-gray-900">{result.contestantName}</td>
+                    <td className="px-3 py-2 text-right text-gray-800">{(result.rankScore ?? result.totalScore).toFixed(2)}</td>
+                    <td className="px-3 py-2 text-right text-gray-700">{result.judgeScores?.length ?? 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <Button variant="outline" size="sm" onClick={onBack} className="mb-2">← Back to Results</Button>
+          <h3 className="text-2xl font-bold text-gray-900">{pageant.name}</h3>
+          <p className="text-sm text-gray-500 mt-1">Scoring Method: {formatScoringMethodLabel(pageant.scoringMethod)}</p>
+        </div>
+        <Badge className="w-fit bg-[#1E3A8A]/10 text-[#1E3A8A] border border-[#1E3A8A]/20">
+          {flatResults.length} contestant{flatResults.length !== 1 ? 's' : ''}
+        </Badge>
+      </div>
+
+      {isStandardResults ? (
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+        {results.map((result) => (
+          <Card key={result.contestantId} className="border border-gray-200 shadow-sm">
+            <CardHeader>
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  {result.photoPath || result.photoUrl ? (
+                    <img
+                      src={result.photoPath || result.photoUrl}
+                      alt={result.contestantName}
+                      className="h-12 w-12 rounded-full object-cover"
+                    />
+                  ) : (
+                    <div className="h-12 w-12 rounded-full bg-[#1E3A8A] text-white flex items-center justify-center font-semibold">
+                      {result.contestantName.charAt(0)}
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <CardTitle className="text-base truncate">{result.contestantName}</CardTitle>
+                    <CardDescription>Contestant #{result.contestantNumber}</CardDescription>
+                  </div>
+                </div>
+                <Badge className="bg-gray-100 text-gray-700">#{result.rank}</Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <p className="text-sm font-medium text-gray-800 mb-2">Judge Scores (0-100%)</p>
+                <div className="h-56 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ReBarChart data={result.judgeScores || []} margin={{ top: 12, right: 10, left: -16, bottom: 8 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                      <XAxis dataKey="judgeLabel" tick={{ fontSize: 11 }} interval={0} angle={-20} textAnchor="end" height={48} />
+                      <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
+                      <Tooltip formatter={(value: number) => [`${Number(value).toFixed(2)}%`, 'Score']} />
+                      <Bar dataKey="percentage" fill="#1E3A8A" radius={[6, 6, 0, 0]}>
+                        <LabelList dataKey="percentage" position="top" formatter={(value: number) => `${Number(value).toFixed(1)}%`} />
+                      </Bar>
+                    </ReBarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto rounded-md border border-gray-200">
+                <table className="w-full min-w-[560px] text-sm">
+                  <thead className="bg-gray-50 text-gray-700">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-medium">Criteria</th>
+                      <th className="px-3 py-2 text-right font-medium">Score</th>
+                      <th className="px-3 py-2 text-right font-medium">Max Score</th>
+                      <th className="px-3 py-2 text-right font-medium">Weight</th>
+                      <th className="px-3 py-2 text-right font-medium">Computed</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.criteriaBreakdown.map((criterion) => {
+                      const computed =
+                        scoringMode === 'AVERAGE'
+                          ? `${criterion.averageScore.toFixed(2)}`
+                          : `${(criterion.computed ?? criterion.weightedContribution).toFixed(2)}%`;
+
+                      return (
+                        <tr key={criterion.criteriaId} className="border-t border-gray-100">
+                          <td className="px-3 py-2 text-gray-800">{criterion.criteriaName}</td>
+                          <td className="px-3 py-2 text-right text-gray-700">{criterion.averageScore.toFixed(2)}</td>
+                          <td className="px-3 py-2 text-right text-gray-700">{(criterion.maxScore ?? 0).toFixed(2)}</td>
+                          <td className="px-3 py-2 text-right text-gray-700">{criterion.weight.toFixed(2)}%</td>
+                          <td className="px-3 py-2 text-right font-medium text-gray-900">{computed}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="rounded-md border border-[#1E3A8A]/20 bg-[#1E3A8A]/5 px-3 py-2 text-sm font-medium text-[#1E3A8A]">
+                {renderFinalValue(result)}
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      ) : (
+        <div className="space-y-5">
+          {results.warnings && results.warnings.length > 0 && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              {results.warnings.join(' ')}
+            </div>
+          )}
+
+          <Card className="border border-yellow-200 bg-gradient-to-r from-yellow-50 to-orange-50">
+            <CardHeader>
+              <CardTitle className="text-lg text-gray-900">Division Winners</CardTitle>
+              <CardDescription>
+                Male Winner: {results.maleWinner?.contestantName || 'N/A'} | Female Winner: {results.femaleWinner?.contestantName || 'N/A'}
+              </CardDescription>
+            </CardHeader>
+          </Card>
+
+          {renderRankingDivision('Male Division', results.maleResults, 'Male Winner', results.maleWinner)}
+          {renderRankingDivision('Female Division', results.femaleResults, 'Female Winner', results.femaleWinner)}
+        </div>
+      )}
+
+      {isStandardResults && (
+      <Card className="border border-yellow-200 bg-gradient-to-r from-yellow-50 to-orange-50">
+        <CardHeader>
+          <CardTitle className="text-lg text-gray-900">Winner: {results[0].contestantName}</CardTitle>
+          <CardDescription>
+            {scoringMode === 'RANKING'
+              ? `Average Rank: ${(results[0].rankScore ?? results[0].totalScore).toFixed(2)} | Position: ${ordinal(results[0].rank)}`
+              : scoringMode === 'AVERAGE'
+              ? `Score: ${(results[0].finalScore ?? results[0].totalScore).toFixed(2)} / 10`
+              : `Score: ${(results[0].finalPercentage ?? results[0].weightedScore).toFixed(2)}%`}
+          </CardDescription>
+        </CardHeader>
+      </Card>
+      )}
     </div>
   );
 }
@@ -505,20 +907,28 @@ function ScoringInterface({
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const [c, cr] = await Promise.all([
+      const [c, cr, pageantScores] = await Promise.all([
         getContestantsByPageant(pageant.id),
         getCriteriaByPageant(pageant.id),
+        getMyScoresByPageant(pageant.id),
       ]);
       if (cancelled) return;
       setContestants(c);
       setCriteria(cr);
+
+      const criteriaIds = new Set(cr.map((item) => item.id));
       const scored = new Set<string>();
-      await Promise.all(
-        c.map(async (cont) => {
-          const is = await hasJudgeScoredContestant(pageant.id, cont.id, judgeId);
-          if (is) scored.add(cont.id);
-        })
-      );
+      c.forEach((cont) => {
+        const scoredCriteria = new Set(
+          pageantScores
+            .filter((s) => s.contestantId === cont.id)
+            .map((s) => s.criteriaId)
+        );
+
+        const isFullyScored = [...criteriaIds].every((criteriaId) => scoredCriteria.has(criteriaId));
+        if (isFullyScored) scored.add(cont.id);
+      });
+
       if (!cancelled) setScoredSet(new Set(scored));
     }
     void load();
@@ -658,10 +1068,11 @@ function ScoringForm({
 
   useEffect(() => {
     async function init() {
-      const [c, js] = await Promise.all([
+      const [c, pageantScores] = await Promise.all([
         getCriteriaByPageant(pageant.id),
-        getJudgeScores(pageant.id, contestant.id, judgeId),
+        getMyScoresByPageant(pageant.id),
       ]);
+      const js = pageantScores.filter((score) => score.contestantId === contestant.id);
       setCriteria(c);
       setJudgeScores(js);
       const si = new Set(js.map((s) => s.criteriaId));
@@ -827,6 +1238,35 @@ function ScoringHistory({
   scores: Score[];
   pageants: Pageant[];
 }) {
+  const [criteriaByPageant, setCriteriaByPageant] = useState<Record<string, Criteria[]>>({});
+
+  useEffect(() => {
+    const pageantIds = [...new Set(scores.map((score) => score.pageantId))];
+
+    if (pageantIds.length === 0) {
+      Promise.resolve().then(() => setCriteriaByPageant({}));
+      return;
+    }
+
+    async function loadCriteria() {
+      const entries = await Promise.all(
+        pageantIds.map(async (pageantId) => {
+          const criteria = await getCriteriaByPageant(pageantId);
+          return [pageantId, criteria] as const;
+        })
+      );
+
+      const nextMap: Record<string, Criteria[]> = {};
+      entries.forEach(([pageantId, criteria]) => {
+        nextMap[pageantId] = criteria;
+      });
+
+      setCriteriaByPageant(nextMap);
+    }
+
+    void loadCriteria();
+  }, [scores]);
+
   if (scores.length === 0) {
     return (
       <div className="text-center py-12">
@@ -867,6 +1307,38 @@ function ScoringHistory({
                 {Object.entries(contestants).map(([contestantId, contestantScores]) => {
                   const totalScore = contestantScores.reduce((sum, s) => sum + s.score, 0);
                   const averageScore = totalScore / contestantScores.length;
+                  const criteria = criteriaByPageant[pageantId] || [];
+
+                  const totalWeight = criteria.reduce((sum, c) => sum + c.weight, 0);
+                  const criteriaById: Record<string, Criteria> = {};
+                  criteria.forEach((criterion) => {
+                    criteriaById[criterion.id] = criterion;
+                  });
+
+                  const weightedMean = contestantScores.reduce((sum, scoreEntry) => {
+                    const criterion = criteriaById[scoreEntry.criteriaId];
+                    if (!criterion || criterion.maxScore <= 0 || totalWeight <= 0) return sum;
+
+                    const adjustedWeight = (criterion.weight / totalWeight) * 100;
+                    const normalized = scoreEntry.score / criterion.maxScore;
+                    return sum + normalized * adjustedWeight;
+                  }, 0);
+
+                  const scoreSummary =
+                    pageant.scoringMethod === 'weighted'
+                      ? {
+                          label: 'Weighted Mean',
+                          value: `${weightedMean.toFixed(2)}%`,
+                        }
+                      : pageant.scoringMethod === 'ranking'
+                      ? {
+                          label: 'Rank Input Avg',
+                          value: averageScore.toFixed(2),
+                        }
+                      : {
+                          label: 'Average',
+                          value: averageScore.toFixed(2),
+                        };
 
                   return (
                     <div
@@ -883,7 +1355,7 @@ function ScoringHistory({
                       </div>
                       <div className="text-right">
                         <p className="font-semibold text-gray-900">
-                          Avg: {averageScore.toFixed(2)}
+                          {scoreSummary.label}: {scoreSummary.value}
                         </p>
                         <p className="text-xs text-gray-500">
                           {formatDateTime(contestantScores[0].submittedAt)}

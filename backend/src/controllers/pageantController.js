@@ -1,7 +1,9 @@
 import { supabase } from '../lib/supabaseClient.js';
 import { isAdmin, assertRole } from '../lib/roleUtils.js';
+import { writeAuditLog } from '../lib/auditLogger.js';
 
-const isAutoManagedPageantStatus = (status) => ['upcoming', 'active', 'completed'].includes(status);
+// Only transition time-window states automatically; keep terminal states stable once set manually.
+const isAutoManagedPageantStatus = (status) => ['upcoming', 'active'].includes(status);
 
 // Helper function to determine pageant status based on event date
 const determinePageantStatus = (eventDate, nowInput = new Date()) => {
@@ -158,6 +160,15 @@ export const createPageant = async (req, res) => {
     .single();
 
   if (error) throw error;
+
+  await writeAuditLog({
+    req,
+    action: 'pageant_created',
+    entityType: 'pageant',
+    entityId: data.id,
+    newValues: data,
+  });
+
   res.status(201).json(data);
 };
 
@@ -168,6 +179,17 @@ export const updatePageant = async (req, res) => {
 
   const { name, description, eventDate, scoringMethod, totalWeight, resultsPublic } = req.body;
   const updates = { updated_at: new Date().toISOString() };
+
+  const { data: currentPageant, error: currentPageantError } = await supabase
+    .from('pageants')
+    .select('*')
+    .eq('id', req.params.id)
+    .single();
+
+  if (currentPageantError || !currentPageant) {
+    return res.status(404).json({ error: 'Pageant not found.' });
+  }
+
   if (name !== undefined) updates.name = name;
   if (description !== undefined) updates.description = description;
   if (eventDate !== undefined) updates.event_date = eventDate;
@@ -188,6 +210,16 @@ export const updatePageant = async (req, res) => {
     .single();
 
   if (error) throw error;
+
+  await writeAuditLog({
+    req,
+    action: 'pageant_updated',
+    entityType: 'pageant',
+    entityId: data.id,
+    oldValues: currentPageant,
+    newValues: data,
+  });
+
   res.json(data);
 };
 
@@ -207,6 +239,16 @@ export const updatePageantStatus = async (req, res) => {
     return res.status(403).json({ error: 'Only admins can archive a pageant.' });
   }
 
+  const { data: currentPageant, error: currentPageantError } = await supabase
+    .from('pageants')
+    .select('*')
+    .eq('id', req.params.id)
+    .single();
+
+  if (currentPageantError || !currentPageant) {
+    return res.status(404).json({ error: 'Pageant not found.' });
+  }
+
   const { data, error } = await supabase
     .from('pageants')
     .update({ status, updated_at: new Date().toISOString() })
@@ -215,6 +257,16 @@ export const updatePageantStatus = async (req, res) => {
     .single();
 
   if (error) throw error;
+
+  await writeAuditLog({
+    req,
+    action: 'pageant_status_updated',
+    entityType: 'pageant',
+    entityId: data.id,
+    oldValues: { status: currentPageant.status },
+    newValues: { status: data.status },
+  });
+
   res.json(data);
 };
 
@@ -226,7 +278,7 @@ export const deletePageant = async (req, res) => {
   // Only the creator or an admin may delete the pageant.
   const { data: pageant, error: fetchError } = await supabase
     .from('pageants')
-    .select('created_by')
+    .select('*')
     .eq('id', req.params.id)
     .single();
 
@@ -238,5 +290,14 @@ export const deletePageant = async (req, res) => {
 
   const { error } = await supabase.from('pageants').delete().eq('id', req.params.id);
   if (error) throw error;
+
+  await writeAuditLog({
+    req,
+    action: 'pageant_deleted',
+    entityType: 'pageant',
+    entityId: req.params.id,
+    oldValues: pageant,
+  });
+
   res.json({ message: 'Pageant deleted.' });
 };

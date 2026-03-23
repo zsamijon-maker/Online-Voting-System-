@@ -154,6 +154,7 @@ export function formatScoringMethod(method: string): string {
     average: 'Average',
     weighted: 'Weighted',
     ranking: 'Ranking',
+    ranking_by_gender: 'Ranking by Gender',
   };
   return methodMap[method] || method;
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import {
   Crown,
@@ -44,7 +44,18 @@ import {
   getPageantJudges,
   validateCriteriaWeights,
 } from '@/services/pageantService';
-import type { Pageant, Contestant, Criteria, PageantJudge, PageantResult, PageantFormData, ContestantFormData, CriteriaFormData, User } from '@/types';
+import type {
+  Pageant,
+  Contestant,
+  Criteria,
+  PageantJudge,
+  PageantResult,
+  PageantResultsResponse,
+  PageantFormData,
+  ContestantFormData,
+  CriteriaFormData,
+  User,
+} from '@/types';
 import { formatDate, formatPageantStatus, formatScoringMethod } from '@/utils/formatters';
 import {
   Dialog,
@@ -89,18 +100,36 @@ export default function PageantCommitteeDashboard() {
   const [isCriteriaModalOpen, setIsCriteriaModalOpen] = useState(false);
   const [isJudgeModalOpen, setIsJudgeModalOpen] = useState(false);
   const [isResultsModalOpen, setIsResultsModalOpen] = useState(false);
-  const [results, setResults] = useState<PageantResult[]>([]);
+  const [results, setResults] = useState<PageantResultsResponse>([]);
+  const [rankingTieBreaker, setRankingTieBreaker] = useState<'weighted_criteria' | 'judge_priority' | 'keep_tied'>('keep_tied');
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [selectedContestant, setSelectedContestant] = useState<Contestant | null>(null);
 
-  const fetchPageants = async () => {
+  const fetchPageants = useCallback(async () => {
     const allPageants = await getAllPageants();
     setPageants(allPageants);
-  };
+  }, []);
 
   useEffect(() => {
-    fetchPageants();
-  }, []);
+    Promise.resolve().then(() => {
+      void fetchPageants();
+    });
+  }, [fetchPageants]);
+
+  useEffect(() => {
+    Promise.resolve().then(() => {
+      void fetchPageants();
+    });
+  }, [activeTab, fetchPageants]);
+
+  useEffect(() => {
+    const handleFocus = () => {
+      void fetchPageants();
+    };
+
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [fetchPageants]);
 
   const handleCreatePageant = async (data: PageantFormData) => {
     if (user) {
@@ -159,11 +188,23 @@ export default function PageantCommitteeDashboard() {
     }
   };
 
-  const handleViewResults = async (pageant: Pageant) => {
-    const pageantResults = await getPageantResults(pageant.id);
+  const handleViewResults = async (pageant: Pageant, tieBreaker = rankingTieBreaker) => {
+    const pageantResults = await getPageantResults(
+      pageant.id,
+      pageant.scoringMethod === 'ranking' || pageant.scoringMethod === 'ranking_by_gender' ? tieBreaker : undefined
+    );
     setResults(pageantResults);
     setSelectedPageant(pageant);
     setIsResultsModalOpen(true);
+  };
+
+  const handleRankingTieBreakerChange = async (value: 'weighted_criteria' | 'judge_priority' | 'keep_tied') => {
+    setRankingTieBreaker(value);
+
+    if (!selectedPageant || (selectedPageant.scoringMethod !== 'ranking' && selectedPageant.scoringMethod !== 'ranking_by_gender')) return;
+
+    const pageantResults = await getPageantResults(selectedPageant.id, value);
+    setResults(pageantResults);
   };
 
   const handleAddContestant = async (pageantId: string, data: ContestantFormData) => {
@@ -183,6 +224,7 @@ export default function PageantCommitteeDashboard() {
       bio: data.bio,
       age: data.age,
       department: data.department,
+      gender: data.gender,
       photoUrl: data.photoUrl,
       isActive: true,
       imageFile: data.imageFile,
@@ -499,6 +541,7 @@ export default function PageantCommitteeDashboard() {
           </DialogHeader>
           {selectedPageant && (
             <ContestantForm
+              scoringMethod={selectedPageant.scoringMethod}
               onSubmit={(data) => handleAddContestant(selectedPageant.id, data)}
               onCancel={() => {
                 setIsContestantModalOpen(false);
@@ -522,6 +565,7 @@ export default function PageantCommitteeDashboard() {
           {selectedPageant && selectedContestant && (
             <ContestantForm
               contestant={selectedContestant}
+              scoringMethod={selectedPageant.scoringMethod}
               submitLabel="Save Changes"
               onSubmit={(data) => handleUpdateContestant(selectedPageant.id, selectedContestant.id, data)}
               onCancel={() => {
@@ -586,7 +630,22 @@ export default function PageantCommitteeDashboard() {
               Results for {selectedPageant?.name}
             </DialogDescription>
           </DialogHeader>
-          <PageantResultsDisplay results={results} />
+          {(selectedPageant?.scoringMethod === 'ranking' || selectedPageant?.scoringMethod === 'ranking_by_gender') && (
+            <div className="mb-4 space-y-2">
+              <Label>Ranking Tie-breaker</Label>
+              <Select value={rankingTieBreaker} onValueChange={(value: 'weighted_criteria' | 'judge_priority' | 'keep_tied') => void handleRankingTieBreakerChange(value)}>
+                <SelectTrigger className="w-full sm:w-[280px]">
+                  <SelectValue placeholder="Select tie-breaker" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="keep_tied">Keep tied rank</SelectItem>
+                  <SelectItem value="weighted_criteria">Highest weighted criteria score</SelectItem>
+                  <SelectItem value="judge_priority">Judge priority</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          <PageantResultsDisplay results={results} scoringMethod={selectedPageant?.scoringMethod} />
         </DialogContent>
       </Dialog>
     </div>
@@ -1361,6 +1420,7 @@ function PageantForm({
             <SelectItem value="average">Average</SelectItem>
             <SelectItem value="weighted">Weighted</SelectItem>
             <SelectItem value="ranking">Ranking</SelectItem>
+            <SelectItem value="ranking_by_gender">Ranking by Gender</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -1381,11 +1441,13 @@ function PageantForm({
 // ============================================
 function ContestantForm({
   contestant,
+  scoringMethod,
   submitLabel,
   onSubmit,
   onCancel,
 }: {
   contestant?: Contestant;
+  scoringMethod: Pageant['scoringMethod'];
   submitLabel?: string;
   onSubmit: (data: ContestantFormData) => void;
   onCancel: () => void;
@@ -1394,6 +1456,7 @@ function ContestantForm({
     contestantNumber: contestant?.contestantNumber || 1,
     firstName: contestant?.firstName || '',
     lastName: contestant?.lastName || '',
+    gender: contestant?.gender ?? undefined,
     bio: contestant?.bio || '',
     age: contestant?.age,
     department: contestant?.department || '',
@@ -1404,6 +1467,9 @@ function ContestantForm({
   const [previewUrl, setPreviewUrl] = useState<string>('');
   const [fileName, setFileName] = useState<string>('');
   const [fileValidationError, setFileValidationError] = useState<string>('');
+  const [genderValidationError, setGenderValidationError] = useState<string>('');
+
+  const genderRequired = scoringMethod === 'ranking_by_gender';
 
   useEffect(() => {
     if (!contestant) return;
@@ -1412,6 +1478,7 @@ function ContestantForm({
       contestantNumber: contestant.contestantNumber,
       firstName: contestant.firstName,
       lastName: contestant.lastName,
+      gender: contestant.gender ?? undefined,
       bio: contestant.bio || '',
       age: contestant.age,
       department: contestant.department || '',
@@ -1422,6 +1489,7 @@ function ContestantForm({
     setPreviewUrl('');
     setFileName('');
     setFileValidationError('');
+    setGenderValidationError('');
   }, [contestant]);
 
   useEffect(() => {
@@ -1432,6 +1500,13 @@ function ContestantForm({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (genderRequired && !formData.gender) {
+      setGenderValidationError('Gender is required for Ranking by Gender pageants.');
+      return;
+    }
+
+    setGenderValidationError('');
     onSubmit(formData);
   };
 
@@ -1515,6 +1590,27 @@ function ContestantForm({
           />
         </div>
       </div>
+      {genderRequired && (
+        <div>
+          <Label htmlFor="gender">Gender</Label>
+          <Select
+            value={formData.gender}
+            onValueChange={(value: 'Male' | 'Female') => {
+              setFormData({ ...formData, gender: value });
+              setGenderValidationError('');
+            }}
+          >
+            <SelectTrigger id="gender">
+              <SelectValue placeholder="Select gender" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="Male">Male</SelectItem>
+              <SelectItem value="Female">Female</SelectItem>
+            </SelectContent>
+          </Select>
+          {genderValidationError ? <p className="text-xs text-red-600 mt-1">{genderValidationError}</p> : null}
+        </div>
+      )}
       <div>
         <Label htmlFor="department">Department/College</Label>
         <Input
@@ -1824,8 +1920,199 @@ function AssignJudgeForm({
 // ============================================
 // PAGEANT RESULTS DISPLAY
 // ============================================
-function PageantResultsDisplay({ results }: { results: PageantResult[] }) {
-  if (results.length === 0) {
+function PageantResultsDisplay({
+  results,
+  scoringMethod,
+}: {
+  results: PageantResultsResponse;
+  scoringMethod?: Pageant['scoringMethod'];
+}) {
+  const renderRankingDivision = (title: string, divisionResults: PageantResult[], winnerLabel: string, winner: PageantResult | null) => (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <h5 className="font-semibold text-gray-900">{title}</h5>
+        <div className="text-sm text-gray-600">
+          {winner ? (
+            <span className="font-medium text-yellow-700">{winnerLabel}: {winner.contestantName}</span>
+          ) : (
+            <span className="text-gray-500">No winner yet</span>
+          )}
+        </div>
+      </div>
+
+      {divisionResults.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-4 text-sm text-gray-500">
+          No contestants in this category.
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-gray-200">
+          <table className="w-full min-w-[640px] text-sm">
+            <thead className="bg-gray-50 text-gray-700">
+              <tr>
+                <th className="px-3 py-2 text-left font-medium">Rank</th>
+                <th className="px-3 py-2 text-left font-medium">Contestant</th>
+                <th className="px-3 py-2 text-right font-medium">Average Rank</th>
+                <th className="px-3 py-2 text-right font-medium">Judges</th>
+              </tr>
+            </thead>
+            <tbody>
+              {divisionResults.map((result) => (
+                <tr key={result.contestantId} className="border-t border-gray-100">
+                  <td className="px-3 py-2 font-semibold text-gray-800">#{result.rank}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-3">
+                      {result.photoPath || result.photoUrl ? (
+                        <img
+                          src={result.photoPath || result.photoUrl}
+                          alt={result.contestantName}
+                          className="w-9 h-9 rounded-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-9 h-9 rounded-full bg-[#1E3A8A] flex items-center justify-center text-white font-medium">
+                          {result.contestantName.charAt(0)}
+                        </div>
+                      )}
+                      <div>
+                        <p className="font-medium text-gray-900">{result.contestantName}</p>
+                        <p className="text-xs text-gray-500">Contestant #{result.contestantNumber}</p>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 text-right text-gray-800">{(result.rankScore ?? result.totalScore).toFixed(2)}</td>
+                  <td className="px-3 py-2 text-right text-gray-700">{result.judgeScores?.length ?? 0}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+
+  if (Array.isArray(results)) {
+    if (results.length === 0) {
+      return (
+        <div className="text-center py-8">
+          <BarChart3 className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+          <p className="text-gray-500">No results available yet.</p>
+        </div>
+      );
+    }
+
+    const scoringMode =
+      results[0].scoringMode ||
+      (scoringMethod === 'average'
+        ? 'AVERAGE'
+        : scoringMethod === 'ranking'
+        ? 'RANKING'
+        : 'WEIGHTED_MEAN');
+
+    const getWinnerSummary = (result: PageantResult) => {
+      if (scoringMode === 'AVERAGE') {
+        return `Contestant #${result.contestantNumber} • Final Score: ${(result.finalScore ?? result.totalScore).toFixed(2)} / 10`;
+      }
+
+      if (scoringMode === 'RANKING') {
+        return `Contestant #${result.contestantNumber} • Final Rank: #${result.rank} • Rank Score: ${(result.rankScore ?? result.totalScore).toFixed(2)}`;
+      }
+
+      return `Contestant #${result.contestantNumber} • Final Percentage: ${(result.finalPercentage ?? result.weightedScore).toFixed(2)}% • Final Rating: ${(result.finalRating ?? result.totalScore).toFixed(2)} / 10`;
+    };
+
+    const getRowScoreLabels = (result: PageantResult) => {
+      if (scoringMode === 'AVERAGE') {
+        return {
+          primary: `${(result.finalScore ?? result.totalScore).toFixed(2)} / 10`,
+          secondary: 'Final Score',
+        };
+      }
+
+      if (scoringMode === 'RANKING') {
+        return {
+          primary: `#${result.rank}`,
+          secondary: `Rank Score: ${(result.rankScore ?? result.totalScore).toFixed(2)}`,
+        };
+      }
+
+      return {
+        primary: `${(result.finalPercentage ?? result.weightedScore).toFixed(2)}%`,
+        secondary: `Final Rating: ${(result.finalRating ?? result.totalScore).toFixed(2)} / 10`,
+      };
+    };
+
+    return (
+      <div className="space-y-6">
+        <div className="bg-gradient-to-r from-yellow-50 to-orange-50 border border-yellow-200 rounded-lg p-4">
+          <h4 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+            <Crown className="w-5 h-5 text-yellow-600" />
+            Winner: {results[0].contestantName}
+          </h4>
+          <p className="text-gray-600 mt-1">
+            {getWinnerSummary(results[0])}
+          </p>
+        </div>
+
+        <div className="space-y-3">
+          <h5 className="font-medium text-gray-900">Full Rankings</h5>
+          {results.map((result) => {
+            const labels = getRowScoreLabels(result);
+
+            return (
+              <div
+                key={result.contestantId}
+                className={`flex items-center gap-4 p-3 rounded-lg ${
+                  result.rank === 1
+                    ? 'bg-yellow-50 border border-yellow-200'
+                    : result.rank === 2
+                    ? 'bg-gray-50 border border-gray-200'
+                    : result.rank === 3
+                    ? 'bg-orange-50 border border-orange-200'
+                    : 'bg-white border border-gray-200'
+                }`}
+              >
+                <div className={`w-8 text-center font-bold ${
+                  result.rank === 1 ? 'text-yellow-600' :
+                  result.rank === 2 ? 'text-gray-600' :
+                  result.rank === 3 ? 'text-orange-600' :
+                  'text-gray-400'
+                }`}>
+                  #{result.rank}
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-3">
+                    {result.photoPath || result.photoUrl ? (
+                      <img
+                        src={result.photoPath || result.photoUrl}
+                        alt={result.contestantName}
+                        className="w-10 h-10 rounded-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-10 h-10 rounded-full bg-[#1E3A8A] flex items-center justify-center text-white font-medium">
+                        {result.contestantName.charAt(0)}
+                      </div>
+                    )}
+                    <div>
+                      <p className="font-medium text-gray-900">{result.contestantName}</p>
+                      <p className="text-sm text-gray-500">
+                        Contestant #{result.contestantNumber}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="font-semibold text-gray-900">{labels.primary}</p>
+                  <p className="text-xs text-gray-500">{labels.secondary}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  const hasNoDivisionResults = results.maleResults.length === 0 && results.femaleResults.length === 0;
+  if (hasNoDivisionResults) {
     return (
       <div className="text-center py-8">
         <BarChart3 className="w-12 h-12 text-gray-300 mx-auto mb-3" />
@@ -1836,67 +2123,23 @@ function PageantResultsDisplay({ results }: { results: PageantResult[] }) {
 
   return (
     <div className="space-y-6">
-      <div className="bg-gradient-to-r from-yellow-50 to-orange-50 border border-yellow-200 rounded-lg p-4">
+      {results.warnings && results.warnings.length > 0 && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          {results.warnings.join(' ')}
+        </div>
+      )}
+
+      <div className="bg-gradient-to-r from-yellow-50 to-orange-50 border border-yellow-200 rounded-lg p-4 space-y-2">
         <h4 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
           <Crown className="w-5 h-5 text-yellow-600" />
-          Winner: {results[0].contestantName}
+          Division Winners
         </h4>
-        <p className="text-gray-600 mt-1">
-          Contestant #{results[0].contestantNumber} • Score: {results[0].weightedScore.toFixed(2)}%
-        </p>
+        <p className="text-gray-700 text-sm">Male Winner: {results.maleWinner?.contestantName || 'N/A'}</p>
+        <p className="text-gray-700 text-sm">Female Winner: {results.femaleWinner?.contestantName || 'N/A'}</p>
       </div>
 
-      <div className="space-y-3">
-        <h5 className="font-medium text-gray-900">Full Rankings</h5>
-        {results.map((result) => (
-          <div
-            key={result.contestantId}
-            className={`flex items-center gap-4 p-3 rounded-lg ${
-              result.rank === 1
-                ? 'bg-yellow-50 border border-yellow-200'
-                : result.rank === 2
-                ? 'bg-gray-50 border border-gray-200'
-                : result.rank === 3
-                ? 'bg-orange-50 border border-orange-200'
-                : 'bg-white border border-gray-200'
-            }`}
-          >
-            <div className={`w-8 text-center font-bold ${
-              result.rank === 1 ? 'text-yellow-600' :
-              result.rank === 2 ? 'text-gray-600' :
-              result.rank === 3 ? 'text-orange-600' :
-              'text-gray-400'
-            }`}>
-              #{result.rank}
-            </div>
-            <div className="flex-1">
-              <div className="flex items-center gap-3">
-                {result.photoPath || result.photoUrl ? (
-                  <img
-                    src={result.photoPath || result.photoUrl}
-                    alt={result.contestantName}
-                    className="w-10 h-10 rounded-full object-cover"
-                  />
-                ) : (
-                  <div className="w-10 h-10 rounded-full bg-[#1E3A8A] flex items-center justify-center text-white font-medium">
-                    {result.contestantName.charAt(0)}
-                  </div>
-                )}
-                <div>
-                  <p className="font-medium text-gray-900">{result.contestantName}</p>
-                  <p className="text-sm text-gray-500">
-                    Contestant #{result.contestantNumber}
-                  </p>
-                </div>
-              </div>
-            </div>
-            <div className="text-right">
-              <p className="font-semibold text-gray-900">{result.weightedScore.toFixed(2)}%</p>
-              <p className="text-xs text-gray-500">Total: {result.totalScore.toFixed(2)}</p>
-            </div>
-          </div>
-        ))}
-      </div>
+      {renderRankingDivision('Male Division', results.maleResults, 'Male Winner', results.maleWinner)}
+      {renderRankingDivision('Female Division', results.femaleResults, 'Female Winner', results.femaleWinner)}
     </div>
   );
 }

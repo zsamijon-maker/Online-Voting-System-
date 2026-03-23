@@ -8,7 +8,8 @@ const STUDENT_GOV_POSITION_LIMITS = Object.freeze({
   Senators: 12,
 });
 
-const isAutoManagedElectionStatus = (status) => ['upcoming', 'active', 'closed'].includes(status);
+// Only transition time-window states automatically; keep terminal states stable once set manually.
+const isAutoManagedElectionStatus = (status) => ['upcoming', 'active'].includes(status);
 
 const computeTimedElectionStatus = (startDate, endDate, now = new Date()) => {
   const start = new Date(startDate);

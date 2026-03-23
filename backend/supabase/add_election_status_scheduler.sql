@@ -81,7 +81,7 @@ BEGIN
         ELSE 'completed'
       END,
       updated_at = NOW()
-    WHERE p.status NOT IN ('draft', 'archived')
+    WHERE p.status IN ('upcoming', 'active')
       AND p.status IS DISTINCT FROM CASE
         WHEN NOW()::date < p.event_date::date THEN 'upcoming'
         WHEN NOW()::date = p.event_date::date THEN 'active'

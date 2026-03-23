@@ -152,7 +152,7 @@ export interface ElectionResult {
 // ============================================
 
 export type PageantStatus = 'draft' | 'upcoming' | 'active' | 'completed' | 'archived';
-export type ScoringMethod = 'average' | 'weighted' | 'ranking';
+export type ScoringMethod = 'average' | 'weighted' | 'ranking' | 'ranking_by_gender';
 
 export interface Pageant {
   id: string;
@@ -174,6 +174,7 @@ export interface Contestant {
   contestantNumber: number;
   firstName: string;
   lastName: string;
+  gender?: 'Male' | 'Female' | null;
   photoPath?: string;
   photoUrl?: string;
   bio?: string;
@@ -223,19 +224,45 @@ export interface PageantResult {
   contestantId: string;
   contestantNumber: number;
   contestantName: string;
+  gender?: 'Male' | 'Female' | null;
   photoPath?: string;
   photoUrl?: string;
   totalScore: number;
   weightedScore: number;
   rank: number;
+  scoringMode?: 'AVERAGE' | 'WEIGHTED_MEAN' | 'RANKING';
+  finalScore?: number | null;
+  finalPercentage?: number | null;
+  finalRating?: number | null;
+  rankScore?: number | null;
+  rankingTieBreaker?: 'weighted_criteria' | 'judge_priority' | 'keep_tied';
+  judgeScores?: {
+    judgeId: string;
+    judgeLabel: string;
+    percentage: number;
+  }[];
   criteriaBreakdown: {
     criteriaId: string;
     criteriaName: string;
     weight: number;
+    maxScore?: number;
     averageScore: number;
     weightedContribution: number;
+    computed?: number;
   }[];
 }
+
+export interface RankingByGenderResults {
+  scoringMode: 'RANKING_BY_GENDER';
+  rankingTieBreaker?: 'weighted_criteria' | 'judge_priority' | 'keep_tied';
+  maleResults: PageantResult[];
+  femaleResults: PageantResult[];
+  maleWinner: PageantResult | null;
+  femaleWinner: PageantResult | null;
+  warnings?: string[];
+}
+
+export type PageantResultsResponse = PageantResult[] | RankingByGenderResults;
 
 // ============================================
 // AUDIT LOG TYPES
@@ -328,6 +355,7 @@ export interface ContestantFormData {
   contestantNumber: number;
   firstName: string;
   lastName: string;
+  gender?: 'Male' | 'Female';
   bio?: string;
   age?: number;
   department?: string;

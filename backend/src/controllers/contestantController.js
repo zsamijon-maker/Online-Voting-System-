@@ -13,6 +13,16 @@ const parseNumber = (value) => {
   return Number.isNaN(n) ? null : n;
 };
 
+const normalizeGender = (value) => {
+  if (value === undefined || value === null || value === '') return null;
+
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === 'male') return 'Male';
+  if (normalized === 'female') return 'Female';
+
+  return undefined;
+};
+
 // GET /api/pageants/:pageantId/contestants
 export const getContestants = async (req, res) => {
   const { data, error } = await supabase
@@ -37,9 +47,28 @@ export const getContestantById = async (req, res) => {
 
 // POST /api/pageants/:pageantId/contestants
 export const createContestant = async (req, res) => {
-  const { contestantNumber, firstName, lastName, bio, age, department, photoUrl } = req.body;
+  const { contestantNumber, firstName, lastName, bio, age, department, photoUrl, gender } = req.body;
   if (!contestantNumber || !firstName || !lastName) {
     return res.status(400).json({ error: 'contestantNumber, firstName, and lastName are required.' });
+  }
+
+  const { data: pageant, error: pageantError } = await supabase
+    .from('pageants')
+    .select('id, scoring_method')
+    .eq('id', req.params.pageantId)
+    .single();
+
+  if (pageantError || !pageant) {
+    return res.status(404).json({ error: 'Pageant not found.' });
+  }
+
+  const normalizedGender = normalizeGender(gender);
+  if (normalizedGender === undefined) {
+    return res.status(400).json({ error: "gender must be either 'Male' or 'Female'." });
+  }
+
+  if (pageant.scoring_method === 'ranking_by_gender' && !normalizedGender) {
+    return res.status(400).json({ error: 'gender is required for pageants using ranking_by_gender.' });
   }
 
   const { data, error } = await supabase
@@ -52,6 +81,7 @@ export const createContestant = async (req, res) => {
       bio: bio || null,
       age: parseNumber(age),
       department: department || null,
+      gender: normalizedGender,
       photo_url: photoUrl || null,
       is_active: true,
     })
@@ -84,7 +114,7 @@ export const createContestant = async (req, res) => {
 
 // PATCH /api/pageants/:pageantId/contestants/:id
 export const updateContestant = async (req, res) => {
-  const { contestantNumber, firstName, lastName, bio, age, department, photoUrl, isActive } = req.body;
+  const { contestantNumber, firstName, lastName, bio, age, department, photoUrl, isActive, gender } = req.body;
   const updates = {};
   if (contestantNumber !== undefined) updates.contestant_number = contestantNumber;
   if (firstName !== undefined) updates.first_name = firstName;
@@ -92,8 +122,29 @@ export const updateContestant = async (req, res) => {
   if (bio !== undefined) updates.bio = bio;
   if (age !== undefined) updates.age = parseNumber(age);
   if (department !== undefined) updates.department = department;
+  if (gender !== undefined) {
+    const normalizedGender = normalizeGender(gender);
+    if (normalizedGender === undefined) {
+      return res.status(400).json({ error: "gender must be either 'Male' or 'Female'." });
+    }
+    updates.gender = normalizedGender;
+  }
   if (photoUrl !== undefined) updates.photo_url = photoUrl;
   if (isActive !== undefined) updates.is_active = parseBoolean(isActive, true);
+
+  const { data: pageant, error: pageantError } = await supabase
+    .from('pageants')
+    .select('id, scoring_method')
+    .eq('id', req.params.pageantId)
+    .single();
+
+  if (pageantError || !pageant) {
+    return res.status(404).json({ error: 'Pageant not found.' });
+  }
+
+  if (pageant.scoring_method === 'ranking_by_gender' && updates.gender === null) {
+    return res.status(400).json({ error: 'gender is required for pageants using ranking_by_gender.' });
+  }
 
   if (req.file) {
     try {

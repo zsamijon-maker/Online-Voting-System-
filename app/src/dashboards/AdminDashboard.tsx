@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import {
   Users,
@@ -18,15 +18,61 @@ import {
   Menu,
   X,
   Activity,
+  Eye,
+  Plus,
+  CheckCircle,
+  Play,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNotification } from '@/contexts/NotificationContext';
 import { getAllUsers, createUser, updateUser, deleteUser, setUserActive, assignRole, removeRole, getUserStatistics } from '@/services/userService';
-import { getAllElections } from '@/services/electionService';
-import { getAllPageants } from '@/services/pageantService';
+import {
+  getAllElections,
+  createElection,
+  updateElection,
+  deleteElection,
+  openElection,
+  closeElection,
+  publishResults,
+  getElectionResults,
+  getCandidatesByElection,
+  getElectionPositions,
+  addCandidate,
+  updateCandidate,
+  removeCandidate,
+} from '@/services/electionService';
+import {
+  getAllPageants,
+  createPageant,
+  updatePageant,
+  deletePageant,
+  startPageant,
+  completePageant,
+  publishPageantResults,
+  getPageantResults,
+  getContestantsByPageant,
+  addContestant,
+  updateContestant,
+  removeContestant,
+} from '@/services/pageantService';
 import { getAllAuditLogs, getAuditStatistics } from '@/services/auditService';
-import type { User, UserRole, Election, Pageant, AuditLog } from '@/types';
-import { formatDate, formatDateTime, formatRoleName } from '@/utils/formatters';
+import type {
+  User,
+  UserRole,
+  Election,
+  Pageant,
+  AuditLog,
+  ElectionFormData,
+  PageantFormData,
+  Candidate,
+  ElectionPosition,
+  CandidateFormData,
+  ElectionResult,
+  Contestant,
+  ContestantFormData,
+  PageantResultsResponse,
+} from '@/types';
+import { formatDate, formatDateTime, formatRoleName, formatScoringMethod } from '@/utils/formatters';
 import {
   Dialog,
   DialogContent,
@@ -53,6 +99,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
 
 interface DashboardStats {
   totalUsers: number;
@@ -81,12 +128,7 @@ export default function AdminDashboard() {
   });
   const [recentAuditLogs, setRecentAuditLogs] = useState<AuditLog[]>([]);
 
-  // Fetch stats on mount
-  useEffect(() => {
-    void fetchStats();
-  }, []);
-
-  const fetchStats = async () => {
+  const fetchStats = useCallback(async () => {
     const [userStatsResult, electionsResult, pageantsResult, auditStatsResult, auditLogsResult] = await Promise.allSettled([
       getUserStatistics(),
       getAllElections(),
@@ -123,7 +165,11 @@ export default function AdminDashboard() {
       showError('Failed to load user statistics. Please refresh the page.');
     }
 
-    setRecentAuditLogs(auditLogs.slice(0, 5));
+    const electionPageantLogs = auditLogs.filter(
+      (log) => log.entityType === 'election' || log.entityType === 'pageant'
+    );
+
+    setRecentAuditLogs(electionPageantLogs.slice(0, 8));
     setStats({
       totalUsers: userStats.totalUsers,
       activeElections: elections.filter(e => e.status === 'active').length,
@@ -133,7 +179,22 @@ export default function AdminDashboard() {
       activePageants: pageants.filter(p => p.status === 'active').length,
       usersByRole: userStats.usersByRole,
     });
-  };
+  }, [showError]);
+
+  // Fetch stats on mount
+  useEffect(() => {
+    Promise.resolve().then(() => {
+      void fetchStats();
+    });
+  }, [fetchStats]);
+
+  useEffect(() => {
+    if (activeTab === 'overview') {
+      Promise.resolve().then(() => {
+        void fetchStats();
+      });
+    }
+  }, [activeTab, fetchStats]);
 
   const handleLogout = async () => {
     await logout();
@@ -260,11 +321,11 @@ export default function AdminDashboard() {
             </TabsContent>
 
             <TabsContent value="elections">
-              <ElectionsTab />
+              <ElectionsTab isActive={activeTab === 'elections'} />
             </TabsContent>
 
             <TabsContent value="pageants">
-              <PageantsTab />
+              <PageantsTab isActive={activeTab === 'pageants'} />
             </TabsContent>
 
             <TabsContent value="audit">
@@ -398,9 +459,9 @@ function OverviewTab({
         </div>
       </div>
 
-      {/* Recent System Activity */}
+      {/* Recent Election/Pageant Activity */}
       <div className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
-        <h3 className="text-base font-semibold text-[#1E3A8A] mb-4">Recent System Activity</h3>
+        <h3 className="text-base font-semibold text-[#1E3A8A] mb-4">Recent Election & Pageant Activity</h3>
         {recentLogs.length > 0 ? (
           <ul className="divide-y divide-gray-100">
             {recentLogs.map((log) => (
@@ -408,6 +469,16 @@ function OverviewTab({
                 <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-[#1E3A8A]" />
                 <div className="min-w-0 flex-1">
                   <p className="text-sm text-gray-800 capitalize">{log.action.replace(/_/g, ' ')}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
+                      {log.entityType}
+                    </Badge>
+                    {typeof (log.newValues as { status?: unknown } | undefined)?.status === 'string' && (
+                      <Badge className="bg-blue-100 text-blue-800 text-[10px]">
+                        Status: {(log.newValues as { status: string }).status}
+                      </Badge>
+                    )}
+                  </div>
                   {log.userName && <p className="text-xs text-gray-500">by {log.userName}</p>}
                   <p className="text-xs text-gray-400">{formatDateTime(log.createdAt)}</p>
                 </div>
@@ -464,11 +535,7 @@ function UserManagementTab({ onUpdate }: { onUpdate: () => void }) {
   const [searchVoter, setSearchVoter] = useState('');
   const [searchJudge, setSearchJudge] = useState('');
 
-  useEffect(() => {
-    void fetchUsers();
-  }, []);
-
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     setIsLoadingUsers(true);
     try {
       const allUsers = await getAllUsers();
@@ -479,7 +546,13 @@ function UserManagementTab({ onUpdate }: { onUpdate: () => void }) {
     } finally {
       setIsLoadingUsers(false);
     }
-  };
+  }, [showError]);
+
+  useEffect(() => {
+    Promise.resolve().then(() => {
+      void fetchUsers();
+    });
+  }, [fetchUsers]);
 
   const handleCreateUser = async (userData: {
     email: string;
@@ -861,6 +934,7 @@ function CreateUserForm({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
+            <SelectItem value="voter">Voter</SelectItem>
             <SelectItem value="election_committee">Election Committee</SelectItem>
             <SelectItem value="pageant_committee">Pageant Committee</SelectItem>
             <SelectItem value="judge">Judge</SelectItem>
@@ -1004,18 +1078,154 @@ function EditUserForm({
 // ============================================
 // ELECTIONS TAB
 // ============================================
-function ElectionsTab() {
+function ElectionsTab({ isActive }: { isActive: boolean }) {
   const [elections, setElections] = useState<Election[]>([]);
+  const [isElectionModalOpen, setIsElectionModalOpen] = useState(false);
+  const [editingElection, setEditingElection] = useState<Election | null>(null);
+  const [selectedElection, setSelectedElection] = useState<Election | null>(null);
+  const [isCandidatesModalOpen, setIsCandidatesModalOpen] = useState(false);
+  const [isResultsModalOpen, setIsResultsModalOpen] = useState(false);
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [positions, setPositions] = useState<ElectionPosition[]>([]);
+  const [results, setResults] = useState<ElectionResult[]>([]);
+  const [editingCandidate, setEditingCandidate] = useState<Candidate | null>(null);
+  const { showSuccess, showError } = useNotification();
+
+  const fetchElections = useCallback(async () => {
+    const data = await getAllElections();
+    setElections(data);
+  }, []);
 
   useEffect(() => {
-    getAllElections().then(setElections);
-  }, []);
+    if (!isActive) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchElections();
+  }, [isActive, fetchElections]);
+
+  const handleSaveElection = async (formData: ElectionFormData) => {
+    if (editingElection) {
+      const updated = await updateElection(editingElection.id, formData as Partial<Election>);
+      if (!updated) {
+        showError('Failed to update election');
+        return;
+      }
+      showSuccess('Election updated successfully');
+    } else {
+      await createElection(formData, 'admin');
+      showSuccess('Election created successfully');
+    }
+
+    setIsElectionModalOpen(false);
+    setEditingElection(null);
+    void fetchElections();
+  };
+
+  const openCandidatesModal = async (election: Election) => {
+    setSelectedElection(election);
+    setIsCandidatesModalOpen(true);
+    try {
+      const [loadedCandidates, loadedPositions] = await Promise.all([
+        getCandidatesByElection(election.id),
+        getElectionPositions(election.id),
+      ]);
+      setCandidates(loadedCandidates);
+      setPositions(loadedPositions);
+    } catch {
+      showError('Failed to load candidates');
+    }
+  };
+
+  const handleSaveCandidate = async (formData: CandidateFormData) => {
+    if (!selectedElection) return;
+
+    if (editingCandidate) {
+      const updated = await updateCandidate(editingCandidate.id, selectedElection.id, {
+        positionId: formData.positionId,
+        displayName: formData.displayName,
+        bio: formData.bio,
+        platform: formData.platform,
+        isWriteIn: formData.isWriteIn,
+      });
+
+      if (!updated) {
+        showError('Failed to update candidate');
+        return;
+      }
+
+      showSuccess('Candidate updated successfully');
+    } else {
+      await addCandidate(selectedElection.id, formData);
+      showSuccess('Candidate added successfully');
+    }
+
+    const refreshed = await getCandidatesByElection(selectedElection.id);
+    setCandidates(refreshed);
+    setEditingCandidate(null);
+  };
+
+  const handleDeleteCandidate = async (candidate: Candidate) => {
+    if (!selectedElection) return;
+    const ok = await removeCandidate(candidate.id, selectedElection.id);
+    if (!ok) {
+      showError('Failed to remove candidate');
+      return;
+    }
+    showSuccess('Candidate removed successfully');
+    const refreshed = await getCandidatesByElection(selectedElection.id);
+    setCandidates(refreshed);
+  };
+
+  const openResultsModal = async (election: Election) => {
+    setSelectedElection(election);
+    setIsResultsModalOpen(true);
+    try {
+      const loaded = await getElectionResults(election.id);
+      setResults(loaded);
+    } catch {
+      setResults([]);
+      showError('Unable to load election results');
+    }
+  };
+
+  const handleStatusAction = async (election: Election, action: 'open' | 'close' | 'publish') => {
+    const response =
+      action === 'open'
+        ? await openElection(election.id)
+        : action === 'close'
+        ? await closeElection(election.id)
+        : await publishResults(election.id);
+
+    if (!response) {
+      showError('Failed to update election action');
+      return;
+    }
+
+    showSuccess(action === 'publish' ? 'Election results published' : `Election ${action} action completed`);
+    void fetchElections();
+  };
+
+  const handleDeleteElection = async (election: Election) => {
+    if (!confirm(`Delete election "${election.title}"?`)) return;
+    const ok = await deleteElection(election.id);
+    if (!ok) {
+      showError('Failed to delete election');
+      return;
+    }
+    showSuccess('Election deleted successfully');
+    void fetchElections();
+  };
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-semibold text-[#1E3A8A]">All Elections</h3>
-        <Button className="bg-[#2E7D32] hover:bg-[#1B5E20] rounded-md font-medium">
+        <Button
+          className="bg-[#2E7D32] hover:bg-[#1B5E20] rounded-md font-medium"
+          onClick={() => {
+            setEditingElection(null);
+            setIsElectionModalOpen(true);
+          }}
+        >
           <Vote className="w-4 h-4 mr-2" />
           Create Election
         </Button>
@@ -1036,6 +1246,9 @@ function ElectionsTab() {
               </th>
               <th className="px-6 py-3 text-left text-xs font-semibold text-white uppercase tracking-wider">
                 Results
+              </th>
+              <th className="px-6 py-3 text-right text-xs font-semibold text-white uppercase tracking-wider">
+                Actions
               </th>
             </tr>
           </thead>
@@ -1075,11 +1288,112 @@ function ElectionsTab() {
                     {election.resultsPublic ? 'Public' : 'Private'}
                   </Badge>
                 </td>
+                <td className="px-6 py-4 whitespace-nowrap text-right">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="sm" className="touch-target-compact">
+                        <MoreHorizontal className="w-4 h-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        onClick={() => {
+                          setEditingElection(election);
+                          setIsElectionModalOpen(true);
+                        }}
+                      >
+                        <Edit className="w-4 h-4 mr-2" />
+                        Edit Election
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => void openCandidatesModal(election)}>
+                        <Users className="w-4 h-4 mr-2" />
+                        Manage Candidates
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => void openResultsModal(election)}>
+                        <Eye className="w-4 h-4 mr-2" />
+                        View Results (Read-only)
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => void handleStatusAction(election, 'open')}>
+                        <Play className="w-4 h-4 mr-2" />
+                        Set Active
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => void handleStatusAction(election, 'close')}>
+                        <CheckCircle className="w-4 h-4 mr-2" />
+                        Set Closed
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => void handleStatusAction(election, 'publish')}>
+                        <Eye className="w-4 h-4 mr-2" />
+                        Publish Results
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        className="text-red-600"
+                        onClick={() => void handleDeleteElection(election)}
+                      >
+                        <Trash2 className="w-4 h-4 mr-2" />
+                        Delete Election
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      <Dialog open={isElectionModalOpen} onOpenChange={setIsElectionModalOpen}>
+        <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{editingElection ? 'Edit Election' : 'Create Election'}</DialogTitle>
+            <DialogDescription>
+              Admin has full control over election lifecycle settings.
+            </DialogDescription>
+          </DialogHeader>
+          <ElectionEditorForm
+            election={editingElection}
+            onSubmit={handleSaveElection}
+            onCancel={() => {
+              setIsElectionModalOpen(false);
+              setEditingElection(null);
+            }}
+          />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isCandidatesModalOpen} onOpenChange={setIsCandidatesModalOpen}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Manage Candidates</DialogTitle>
+            <DialogDescription>
+              {selectedElection ? `Election: ${selectedElection.title}` : 'Manage election candidates'}
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedElection && (
+            <AdminCandidateManager
+              candidates={candidates}
+              positions={positions}
+              editingCandidate={editingCandidate}
+              onSave={handleSaveCandidate}
+              onEdit={setEditingCandidate}
+              onDelete={handleDeleteCandidate}
+              onCancelEdit={() => setEditingCandidate(null)}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isResultsModalOpen} onOpenChange={setIsResultsModalOpen}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Election Results (Read-only)</DialogTitle>
+            <DialogDescription>
+              {selectedElection ? selectedElection.title : 'Election'} results snapshot.
+            </DialogDescription>
+          </DialogHeader>
+          <AdminElectionResultsView results={results} />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1087,18 +1401,151 @@ function ElectionsTab() {
 // ============================================
 // PAGEANTS TAB
 // ============================================
-function PageantsTab() {
+function PageantsTab({ isActive }: { isActive: boolean }) {
   const [pageants, setPageants] = useState<Pageant[]>([]);
+  const [isPageantModalOpen, setIsPageantModalOpen] = useState(false);
+  const [editingPageant, setEditingPageant] = useState<Pageant | null>(null);
+  const [selectedPageant, setSelectedPageant] = useState<Pageant | null>(null);
+  const [isContestantsModalOpen, setIsContestantsModalOpen] = useState(false);
+  const [isResultsModalOpen, setIsResultsModalOpen] = useState(false);
+  const [contestants, setContestants] = useState<Contestant[]>([]);
+  const [editingContestant, setEditingContestant] = useState<Contestant | null>(null);
+  const [results, setResults] = useState<PageantResultsResponse>([]);
+  const { showSuccess, showError } = useNotification();
+
+  const fetchPageants = useCallback(async () => {
+    const data = await getAllPageants();
+    setPageants(data);
+  }, []);
 
   useEffect(() => {
-    getAllPageants().then(setPageants);
-  }, []);
+    if (!isActive) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchPageants();
+  }, [isActive, fetchPageants]);
+
+  const handleSavePageant = async (formData: PageantFormData) => {
+    if (editingPageant) {
+      const updated = await updatePageant(editingPageant.id, formData as Partial<Pageant>);
+      if (!updated) {
+        showError('Failed to update pageant');
+        return;
+      }
+      showSuccess('Pageant updated successfully');
+    } else {
+      await createPageant(formData, 'admin');
+      showSuccess('Pageant created successfully');
+    }
+
+    setIsPageantModalOpen(false);
+    setEditingPageant(null);
+    void fetchPageants();
+  };
+
+  const openContestantsModal = async (pageant: Pageant) => {
+    setSelectedPageant(pageant);
+    setIsContestantsModalOpen(true);
+    try {
+      const loaded = await getContestantsByPageant(pageant.id);
+      setContestants(loaded);
+    } catch {
+      showError('Failed to load contestants');
+    }
+  };
+
+  const handleSaveContestant = async (formData: ContestantFormData) => {
+    if (!selectedPageant) return;
+
+    if (editingContestant) {
+      const updated = await updateContestant(editingContestant.id, selectedPageant.id, {
+        contestantNumber: formData.contestantNumber,
+        firstName: formData.firstName,
+        lastName: formData.lastName,
+        gender: formData.gender,
+        bio: formData.bio,
+        age: formData.age,
+        department: formData.department,
+        photoUrl: formData.photoUrl,
+        isActive: true,
+      });
+      if (!updated) {
+        showError('Failed to update contestant');
+        return;
+      }
+      showSuccess('Contestant updated successfully');
+    } else {
+      await addContestant(selectedPageant.id, formData);
+      showSuccess('Contestant added successfully');
+    }
+
+    const refreshed = await getContestantsByPageant(selectedPageant.id);
+    setContestants(refreshed);
+    setEditingContestant(null);
+  };
+
+  const handleDeleteContestant = async (contestant: Contestant) => {
+    if (!selectedPageant) return;
+    const ok = await removeContestant(contestant.id, selectedPageant.id);
+    if (!ok) {
+      showError('Failed to remove contestant');
+      return;
+    }
+    showSuccess('Contestant removed successfully');
+    const refreshed = await getContestantsByPageant(selectedPageant.id);
+    setContestants(refreshed);
+  };
+
+  const openResultsModal = async (pageant: Pageant) => {
+    setSelectedPageant(pageant);
+    setIsResultsModalOpen(true);
+    try {
+      const loaded = await getPageantResults(pageant.id);
+      setResults(loaded);
+    } catch {
+      setResults([]);
+      showError('Unable to load pageant results');
+    }
+  };
+
+  const handleStatusAction = async (pageant: Pageant, action: 'start' | 'complete' | 'publish') => {
+    const response =
+      action === 'start'
+        ? await startPageant(pageant.id)
+        : action === 'complete'
+        ? await completePageant(pageant.id)
+        : await publishPageantResults(pageant.id);
+
+    if (!response) {
+      showError('Failed to update pageant action');
+      return;
+    }
+
+    showSuccess(action === 'publish' ? 'Pageant results published' : `Pageant ${action} action completed`);
+    void fetchPageants();
+  };
+
+  const handleDeletePageant = async (pageant: Pageant) => {
+    if (!confirm(`Delete pageant "${pageant.name}"?`)) return;
+    const ok = await deletePageant(pageant.id);
+    if (!ok) {
+      showError('Failed to delete pageant');
+      return;
+    }
+    showSuccess('Pageant deleted successfully');
+    void fetchPageants();
+  };
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-semibold text-[#1E3A8A]">All Pageants</h3>
-        <Button className="bg-[#2E7D32] hover:bg-[#1B5E20] rounded-md font-medium">
+        <Button
+          className="bg-[#2E7D32] hover:bg-[#1B5E20] rounded-md font-medium"
+          onClick={() => {
+            setEditingPageant(null);
+            setIsPageantModalOpen(true);
+          }}
+        >
           <Crown className="w-4 h-4 mr-2" />
           Create Pageant
         </Button>
@@ -1120,6 +1567,9 @@ function PageantsTab() {
               <th className="px-6 py-3 text-left text-xs font-semibold text-white uppercase tracking-wider">
                 Results
               </th>
+              <th className="px-6 py-3 text-right text-xs font-semibold text-white uppercase tracking-wider">
+                Actions
+              </th>
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
@@ -1127,7 +1577,7 @@ function PageantsTab() {
               <tr key={pageant.id} className="hover:bg-gray-50">
                 <td className="px-6 py-4 whitespace-nowrap">
                   <div className="text-sm font-medium text-gray-900">{pageant.name}</div>
-                  <div className="text-sm text-gray-500">{pageant.scoringMethod} scoring</div>
+                  <div className="text-sm text-gray-500">{formatScoringMethod(pageant.scoringMethod)} scoring</div>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
                   <Badge
@@ -1158,10 +1608,769 @@ function PageantsTab() {
                     {pageant.resultsPublic ? 'Public' : 'Private'}
                   </Badge>
                 </td>
+                <td className="px-6 py-4 whitespace-nowrap text-right">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="sm" className="touch-target-compact">
+                        <MoreHorizontal className="w-4 h-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        onClick={() => {
+                          setEditingPageant(pageant);
+                          setIsPageantModalOpen(true);
+                        }}
+                      >
+                        <Edit className="w-4 h-4 mr-2" />
+                        Edit Pageant
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => void openContestantsModal(pageant)}>
+                        <Users className="w-4 h-4 mr-2" />
+                        Manage Contestants
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => void openResultsModal(pageant)}>
+                        <Eye className="w-4 h-4 mr-2" />
+                        View Results (Read-only)
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => void handleStatusAction(pageant, 'start')}>
+                        <Play className="w-4 h-4 mr-2" />
+                        Set Active
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => void handleStatusAction(pageant, 'complete')}>
+                        <CheckCircle className="w-4 h-4 mr-2" />
+                        Set Completed
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => void handleStatusAction(pageant, 'publish')}>
+                        <Eye className="w-4 h-4 mr-2" />
+                        Publish Results
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        className="text-red-600"
+                        onClick={() => void handleDeletePageant(pageant)}
+                      >
+                        <Trash2 className="w-4 h-4 mr-2" />
+                        Delete Pageant
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
+      </div>
+
+      <Dialog open={isPageantModalOpen} onOpenChange={setIsPageantModalOpen}>
+        <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{editingPageant ? 'Edit Pageant' : 'Create Pageant'}</DialogTitle>
+            <DialogDescription>
+              Admin has full control over pageant lifecycle settings.
+            </DialogDescription>
+          </DialogHeader>
+          <PageantEditorForm
+            pageant={editingPageant}
+            onSubmit={handleSavePageant}
+            onCancel={() => {
+              setIsPageantModalOpen(false);
+              setEditingPageant(null);
+            }}
+          />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isContestantsModalOpen} onOpenChange={setIsContestantsModalOpen}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Manage Contestants</DialogTitle>
+            <DialogDescription>
+              {selectedPageant ? `Pageant: ${selectedPageant.name}` : 'Manage pageant contestants'}
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedPageant && (
+            <AdminContestantManager
+              pageant={selectedPageant}
+              contestants={contestants}
+              editingContestant={editingContestant}
+              onSave={handleSaveContestant}
+              onEdit={setEditingContestant}
+              onDelete={handleDeleteContestant}
+              onCancelEdit={() => setEditingContestant(null)}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isResultsModalOpen} onOpenChange={setIsResultsModalOpen}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Pageant Results (Read-only)</DialogTitle>
+            <DialogDescription>
+              {selectedPageant ? selectedPageant.name : 'Pageant'} results snapshot.
+            </DialogDescription>
+          </DialogHeader>
+          <AdminPageantResultsView results={results} />
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function ElectionEditorForm({
+  election,
+  onSubmit,
+  onCancel,
+}: {
+  election: Election | null;
+  onSubmit: (formData: ElectionFormData) => void;
+  onCancel: () => void;
+}) {
+  const [formData, setFormData] = useState<ElectionFormData>({
+    title: election?.title || '',
+    description: election?.description || '',
+    type: election?.type || 'student_government',
+    startDate: election?.startDate || '',
+    endDate: election?.endDate || '',
+    allowWriteIns: election?.allowWriteIns || false,
+    maxVotesPerVoter: election?.maxVotesPerVoter || 1,
+    resultsPublic: election?.resultsPublic || false,
+  });
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setFormData({
+      title: election?.title || '',
+      description: election?.description || '',
+      type: election?.type || 'student_government',
+      startDate: election?.startDate || '',
+      endDate: election?.endDate || '',
+      allowWriteIns: election?.allowWriteIns || false,
+      maxVotesPerVoter: election?.maxVotesPerVoter || 1,
+      resultsPublic: election?.resultsPublic || false,
+    });
+  }, [election]);
+
+  return (
+    <form
+      className="space-y-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit(formData);
+      }}
+    >
+      <div>
+        <Label htmlFor="election-title">Title</Label>
+        <Input
+          id="election-title"
+          value={formData.title}
+          onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+          required
+        />
+      </div>
+      <div>
+        <Label htmlFor="election-description">Description</Label>
+        <Textarea
+          id="election-description"
+          rows={3}
+          value={formData.description}
+          onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+        />
+      </div>
+      <div>
+        <Label htmlFor="election-type">Type</Label>
+        <Select
+          value={formData.type}
+          onValueChange={(value) => setFormData({ ...formData, type: value as ElectionFormData['type'] })}
+        >
+          <SelectTrigger id="election-type">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="student_government">Student Government</SelectItem>
+            <SelectItem value="class_representative">Class Representative</SelectItem>
+            <SelectItem value="club_officers">Club Officers</SelectItem>
+            <SelectItem value="other">Other</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <Label htmlFor="election-start">Start Date</Label>
+          <Input
+            id="election-start"
+            type="datetime-local"
+            value={formData.startDate.slice(0, 16)}
+            onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
+            required
+          />
+        </div>
+        <div>
+          <Label htmlFor="election-end">End Date</Label>
+          <Input
+            id="election-end"
+            type="datetime-local"
+            value={formData.endDate.slice(0, 16)}
+            onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
+            required
+          />
+        </div>
+      </div>
+      <DialogFooter className="touch-footer">
+        <Button type="button" variant="outline" className="touch-target w-full sm:w-auto" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button type="submit" className="touch-target w-full rounded-md bg-[#2E7D32] font-medium hover:bg-[#1B5E20] sm:w-auto">
+          {election ? 'Save Election' : 'Create Election'}
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}
+
+function PageantEditorForm({
+  pageant,
+  onSubmit,
+  onCancel,
+}: {
+  pageant: Pageant | null;
+  onSubmit: (formData: PageantFormData) => void;
+  onCancel: () => void;
+}) {
+  const [formData, setFormData] = useState<PageantFormData>({
+    name: pageant?.name || '',
+    description: pageant?.description || '',
+    eventDate: pageant?.eventDate || '',
+    scoringMethod: pageant?.scoringMethod || 'weighted',
+    totalWeight: pageant?.totalWeight || 100,
+    resultsPublic: pageant?.resultsPublic || false,
+  });
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setFormData({
+      name: pageant?.name || '',
+      description: pageant?.description || '',
+      eventDate: pageant?.eventDate || '',
+      scoringMethod: pageant?.scoringMethod || 'weighted',
+      totalWeight: pageant?.totalWeight || 100,
+      resultsPublic: pageant?.resultsPublic || false,
+    });
+  }, [pageant]);
+
+  return (
+    <form
+      className="space-y-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit(formData);
+      }}
+    >
+      <div>
+        <Label htmlFor="pageant-name">Name</Label>
+        <Input
+          id="pageant-name"
+          value={formData.name}
+          onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+          required
+        />
+      </div>
+      <div>
+        <Label htmlFor="pageant-description">Description</Label>
+        <Textarea
+          id="pageant-description"
+          rows={3}
+          value={formData.description}
+          onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+        />
+      </div>
+      <div>
+        <Label htmlFor="pageant-date">Event Date</Label>
+        <Input
+          id="pageant-date"
+          type="date"
+          value={formData.eventDate.slice(0, 10)}
+          onChange={(e) => setFormData({ ...formData, eventDate: e.target.value })}
+          required
+        />
+      </div>
+      <div>
+        <Label htmlFor="pageant-method">Scoring Method</Label>
+        <Select
+          value={formData.scoringMethod}
+          onValueChange={(value) => setFormData({ ...formData, scoringMethod: value as PageantFormData['scoringMethod'] })}
+        >
+          <SelectTrigger id="pageant-method">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="average">Average</SelectItem>
+            <SelectItem value="weighted">Weighted</SelectItem>
+            <SelectItem value="ranking">Ranking</SelectItem>
+            <SelectItem value="ranking_by_gender">Ranking by Gender</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <DialogFooter className="touch-footer">
+        <Button type="button" variant="outline" className="touch-target w-full sm:w-auto" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button type="submit" className="touch-target w-full rounded-md bg-[#2E7D32] font-medium hover:bg-[#1B5E20] sm:w-auto">
+          {pageant ? 'Save Pageant' : 'Create Pageant'}
+        </Button>
+      </DialogFooter>
+    </form>
+  );
+}
+
+function AdminCandidateManager({
+  candidates,
+  positions,
+  editingCandidate,
+  onSave,
+  onEdit,
+  onDelete,
+  onCancelEdit,
+}: {
+  candidates: Candidate[];
+  positions: ElectionPosition[];
+  editingCandidate: Candidate | null;
+  onSave: (formData: CandidateFormData) => void;
+  onEdit: (candidate: Candidate) => void;
+  onDelete: (candidate: Candidate) => void;
+  onCancelEdit: () => void;
+}) {
+  const [formData, setFormData] = useState<CandidateFormData>({
+    positionId: positions[0]?.id || '',
+    displayName: '',
+    bio: '',
+    platform: '',
+    photoUrl: '',
+    isWriteIn: false,
+  });
+
+  useEffect(() => {
+    if (!editingCandidate) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setFormData({
+        positionId: positions[0]?.id || '',
+        displayName: '',
+        bio: '',
+        platform: '',
+        photoUrl: '',
+        isWriteIn: false,
+      });
+      return;
+    }
+
+    setFormData({
+      positionId: editingCandidate.positionId || '',
+      displayName: editingCandidate.displayName,
+      bio: editingCandidate.bio || '',
+      platform: editingCandidate.platform || '',
+      photoUrl: editingCandidate.photoUrl || '',
+      isWriteIn: editingCandidate.isWriteIn,
+    });
+  }, [editingCandidate, positions]);
+
+  return (
+    <div className="space-y-5">
+      <form
+        className="space-y-3 rounded-md border border-gray-200 p-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSave(formData);
+        }}
+      >
+        <div className="flex items-center justify-between">
+          <h4 className="font-semibold text-gray-900">{editingCandidate ? 'Edit Candidate' : 'Add Candidate'}</h4>
+          {editingCandidate && (
+            <Button type="button" variant="outline" size="sm" onClick={onCancelEdit}>Cancel Edit</Button>
+          )}
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <Label>Position</Label>
+            <Select
+              value={formData.positionId}
+              onValueChange={(value) => setFormData({ ...formData, positionId: value })}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select position" />
+              </SelectTrigger>
+              <SelectContent>
+                {positions.map((position) => (
+                  <SelectItem key={position.id} value={position.id}>{position.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label>Display Name</Label>
+            <Input
+              value={formData.displayName}
+              onChange={(e) => setFormData({ ...formData, displayName: e.target.value })}
+              required
+            />
+          </div>
+        </div>
+        <div>
+          <Label>Bio</Label>
+          <Textarea rows={2} value={formData.bio} onChange={(e) => setFormData({ ...formData, bio: e.target.value })} />
+        </div>
+        <div>
+          <Label>Platform</Label>
+          <Textarea rows={2} value={formData.platform} onChange={(e) => setFormData({ ...formData, platform: e.target.value })} />
+        </div>
+        <div>
+          <Label>Write-in Candidate</Label>
+          <Select
+            value={String(formData.isWriteIn)}
+            onValueChange={(value) => setFormData({ ...formData, isWriteIn: value === 'true' })}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="false">No</SelectItem>
+              <SelectItem value="true">Yes</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex justify-end">
+          <Button type="submit" className="bg-[#2E7D32] hover:bg-[#1B5E20]">
+            <Plus className="w-4 h-4 mr-2" />
+            {editingCandidate ? 'Save Candidate' : 'Add Candidate'}
+          </Button>
+        </div>
+      </form>
+
+      <div className="rounded-md border border-gray-200 overflow-x-auto">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-4 py-2 text-left text-xs font-semibold uppercase">Candidate</th>
+              <th className="px-4 py-2 text-left text-xs font-semibold uppercase">Position</th>
+              <th className="px-4 py-2 text-left text-xs font-semibold uppercase">Status</th>
+              <th className="px-4 py-2 text-right text-xs font-semibold uppercase">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {candidates.map((candidate) => (
+              <tr key={candidate.id}>
+                <td className="px-4 py-2 text-sm text-gray-900">{candidate.displayName}</td>
+                <td className="px-4 py-2 text-sm text-gray-700">{candidate.position}</td>
+                <td className="px-4 py-2 text-sm">
+                  <Badge className={candidate.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-700'}>
+                    {candidate.isActive ? 'Active' : 'Inactive'}
+                  </Badge>
+                </td>
+                <td className="px-4 py-2 text-right">
+                  <Button variant="ghost" size="sm" onClick={() => onEdit(candidate)}>
+                    <Edit className="w-4 h-4" />
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => onDelete(candidate)}>
+                    <Trash2 className="w-4 h-4 text-red-500" />
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function AdminContestantManager({
+  pageant,
+  contestants,
+  editingContestant,
+  onSave,
+  onEdit,
+  onDelete,
+  onCancelEdit,
+}: {
+  pageant: Pageant;
+  contestants: Contestant[];
+  editingContestant: Contestant | null;
+  onSave: (formData: ContestantFormData) => void;
+  onEdit: (contestant: Contestant) => void;
+  onDelete: (contestant: Contestant) => void;
+  onCancelEdit: () => void;
+}) {
+  const [formData, setFormData] = useState<ContestantFormData>({
+    contestantNumber: 1,
+    firstName: '',
+    lastName: '',
+    gender: undefined,
+    bio: '',
+    age: undefined,
+    department: '',
+    photoUrl: '',
+  });
+
+  useEffect(() => {
+    if (!editingContestant) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setFormData({
+        contestantNumber: Math.max(1, contestants.length + 1),
+        firstName: '',
+        lastName: '',
+        gender: undefined,
+        bio: '',
+        age: undefined,
+        department: '',
+        photoUrl: '',
+      });
+      return;
+    }
+
+    setFormData({
+      contestantNumber: editingContestant.contestantNumber,
+      firstName: editingContestant.firstName,
+      lastName: editingContestant.lastName,
+      gender: editingContestant.gender ?? undefined,
+      bio: editingContestant.bio || '',
+      age: editingContestant.age,
+      department: editingContestant.department || '',
+      photoUrl: editingContestant.photoUrl || '',
+    });
+  }, [editingContestant, contestants.length]);
+
+  const genderRequired = pageant.scoringMethod === 'ranking_by_gender';
+
+  return (
+    <div className="space-y-5">
+      <form
+        className="space-y-3 rounded-md border border-gray-200 p-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (genderRequired && !formData.gender) return;
+          onSave(formData);
+        }}
+      >
+        <div className="flex items-center justify-between">
+          <h4 className="font-semibold text-gray-900">{editingContestant ? 'Edit Contestant' : 'Add Contestant'}</h4>
+          {editingContestant && (
+            <Button type="button" variant="outline" size="sm" onClick={onCancelEdit}>Cancel Edit</Button>
+          )}
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <Label>Contestant Number</Label>
+            <Input
+              type="number"
+              min={1}
+              value={formData.contestantNumber}
+              onChange={(e) => setFormData({ ...formData, contestantNumber: Number(e.target.value) })}
+              required
+            />
+          </div>
+          <div>
+            <Label>Age</Label>
+            <Input
+              type="number"
+              value={formData.age || ''}
+              onChange={(e) => setFormData({ ...formData, age: Number(e.target.value) || undefined })}
+            />
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <Label>First Name</Label>
+            <Input value={formData.firstName} onChange={(e) => setFormData({ ...formData, firstName: e.target.value })} required />
+          </div>
+          <div>
+            <Label>Last Name</Label>
+            <Input value={formData.lastName} onChange={(e) => setFormData({ ...formData, lastName: e.target.value })} required />
+          </div>
+        </div>
+        <div>
+          <Label>Department</Label>
+          <Input value={formData.department} onChange={(e) => setFormData({ ...formData, department: e.target.value })} />
+        </div>
+        {genderRequired && (
+          <div>
+            <Label>Gender</Label>
+            <Select value={formData.gender} onValueChange={(value: 'Male' | 'Female') => setFormData({ ...formData, gender: value })}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select gender" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="Male">Male</SelectItem>
+                <SelectItem value="Female">Female</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+        <div>
+          <Label>Biography</Label>
+          <Textarea rows={2} value={formData.bio} onChange={(e) => setFormData({ ...formData, bio: e.target.value })} />
+        </div>
+        <div className="flex justify-end">
+          <Button type="submit" className="bg-[#2E7D32] hover:bg-[#1B5E20]">
+            <Plus className="w-4 h-4 mr-2" />
+            {editingContestant ? 'Save Contestant' : 'Add Contestant'}
+          </Button>
+        </div>
+      </form>
+
+      <div className="rounded-md border border-gray-200 overflow-x-auto">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-4 py-2 text-left text-xs font-semibold uppercase">Contestant</th>
+              <th className="px-4 py-2 text-left text-xs font-semibold uppercase">No.</th>
+              <th className="px-4 py-2 text-left text-xs font-semibold uppercase">Gender</th>
+              <th className="px-4 py-2 text-right text-xs font-semibold uppercase">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {contestants.map((contestant) => (
+              <tr key={contestant.id}>
+                <td className="px-4 py-2 text-sm text-gray-900">{contestant.firstName} {contestant.lastName}</td>
+                <td className="px-4 py-2 text-sm text-gray-700">{contestant.contestantNumber}</td>
+                <td className="px-4 py-2 text-sm text-gray-700">{contestant.gender || 'N/A'}</td>
+                <td className="px-4 py-2 text-right">
+                  <Button variant="ghost" size="sm" onClick={() => onEdit(contestant)}>
+                    <Edit className="w-4 h-4" />
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => onDelete(contestant)}>
+                    <Trash2 className="w-4 h-4 text-red-500" />
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function AdminElectionResultsView({ results }: { results: ElectionResult[] }) {
+  if (results.length === 0) {
+    return <p className="text-sm text-gray-500">No result records available.</p>;
+  }
+
+  return (
+    <div className="space-y-4">
+      {results.map((positionResult) => (
+        <div key={positionResult.position} className="rounded-md border border-gray-200 overflow-x-auto">
+          <div className="px-4 py-3 border-b border-gray-200 bg-gray-50">
+            <p className="font-semibold text-gray-900">{positionResult.position}</p>
+            <p className="text-xs text-gray-500">Total Votes: {positionResult.totalVotes}</p>
+          </div>
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-white">
+              <tr>
+                <th className="px-4 py-2 text-left text-xs font-semibold uppercase">Candidate</th>
+                <th className="px-4 py-2 text-right text-xs font-semibold uppercase">Votes</th>
+                <th className="px-4 py-2 text-right text-xs font-semibold uppercase">Percentage</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {positionResult.candidates.map((candidate) => (
+                <tr key={candidate.candidateId}>
+                  <td className="px-4 py-2 text-sm text-gray-900">{candidate.displayName}</td>
+                  <td className="px-4 py-2 text-sm text-right text-gray-700">{candidate.voteCount}</td>
+                  <td className="px-4 py-2 text-sm text-right text-gray-700">{candidate.percentage.toFixed(1)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AdminPageantResultsView({ results }: { results: PageantResultsResponse }) {
+  if (Array.isArray(results)) {
+    if (results.length === 0) {
+      return <p className="text-sm text-gray-500">No result records available.</p>;
+    }
+
+    return (
+      <div className="rounded-md border border-gray-200 overflow-x-auto">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-4 py-2 text-left text-xs font-semibold uppercase">Rank</th>
+              <th className="px-4 py-2 text-left text-xs font-semibold uppercase">Contestant</th>
+              <th className="px-4 py-2 text-right text-xs font-semibold uppercase">Score</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {results.map((result) => (
+              <tr key={result.contestantId}>
+                <td className="px-4 py-2 text-sm text-gray-900">#{result.rank}</td>
+                <td className="px-4 py-2 text-sm text-gray-900">{result.contestantName}</td>
+                <td className="px-4 py-2 text-sm text-right text-gray-700">
+                  {result.scoringMode === 'AVERAGE'
+                    ? `${(result.finalScore ?? result.totalScore).toFixed(2)} / 10`
+                    : result.scoringMode === 'RANKING'
+                    ? `${(result.rankScore ?? result.totalScore).toFixed(2)} rank`
+                    : `${(result.finalPercentage ?? result.weightedScore).toFixed(2)}%`}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-md border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-900">
+        Male Winner: {results.maleWinner?.contestantName || 'N/A'} | Female Winner: {results.femaleWinner?.contestantName || 'N/A'}
+      </div>
+      <div className="grid grid-cols-1 gap-4">
+        <div className="rounded-md border border-gray-200 overflow-x-auto">
+          <div className="px-4 py-2 border-b border-gray-200 bg-gray-50 font-semibold text-gray-900">Male Division</div>
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead>
+              <tr>
+                <th className="px-4 py-2 text-left text-xs font-semibold uppercase">Rank</th>
+                <th className="px-4 py-2 text-left text-xs font-semibold uppercase">Contestant</th>
+                <th className="px-4 py-2 text-right text-xs font-semibold uppercase">Average Rank</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {results.maleResults.map((result) => (
+                <tr key={result.contestantId}>
+                  <td className="px-4 py-2 text-sm">#{result.rank}</td>
+                  <td className="px-4 py-2 text-sm">{result.contestantName}</td>
+                  <td className="px-4 py-2 text-sm text-right">{(result.rankScore ?? result.totalScore).toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="rounded-md border border-gray-200 overflow-x-auto">
+          <div className="px-4 py-2 border-b border-gray-200 bg-gray-50 font-semibold text-gray-900">Female Division</div>
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead>
+              <tr>
+                <th className="px-4 py-2 text-left text-xs font-semibold uppercase">Rank</th>
+                <th className="px-4 py-2 text-left text-xs font-semibold uppercase">Contestant</th>
+                <th className="px-4 py-2 text-right text-xs font-semibold uppercase">Average Rank</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {results.femaleResults.map((result) => (
+                <tr key={result.contestantId}>
+                  <td className="px-4 py-2 text-sm">#{result.rank}</td>
+                  <td className="px-4 py-2 text-sm">{result.contestantName}</td>
+                  <td className="px-4 py-2 text-sm text-right">{(result.rankScore ?? result.totalScore).toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

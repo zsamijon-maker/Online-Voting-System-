@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS pageants (
   event_date TIMESTAMPTZ NOT NULL,
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'upcoming', 'active', 'completed', 'archived')),
   created_by UUID NOT NULL REFERENCES users(id),
-  scoring_method TEXT NOT NULL CHECK (scoring_method IN ('average', 'weighted', 'ranking')),
+  scoring_method TEXT NOT NULL CHECK (scoring_method IN ('average', 'weighted', 'ranking', 'ranking_by_gender')),
   total_weight NUMERIC NOT NULL DEFAULT 100,
   results_public BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -117,6 +117,7 @@ CREATE TABLE IF NOT EXISTS contestants (
   bio TEXT,
   age INT,
   department TEXT,
+  gender TEXT CHECK (gender IN ('Male', 'Female')),
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (pageant_id, contestant_number)
