@@ -1789,6 +1789,7 @@ function ElectionEditorForm({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="student_government">Student Government</SelectItem>
+            <SelectItem value="fstlp_officers">FSTLP Officers</SelectItem>
             <SelectItem value="class_representative">Class Representative</SelectItem>
             <SelectItem value="club_officers">Club Officers</SelectItem>
             <SelectItem value="other">Other</SelectItem>

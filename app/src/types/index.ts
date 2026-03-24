@@ -86,7 +86,7 @@ export type Permission =
 // ELECTION TYPES
 // ============================================
 
-export type ElectionType = 'student_government' | 'class_representative' | 'club_officers' | 'other';
+export type ElectionType = 'student_government' | 'fstlp_officers' | 'class_representative' | 'club_officers' | 'other';
 export type ElectionStatus = 'draft' | 'upcoming' | 'active' | 'closed' | 'archived';
 
 export interface Election {

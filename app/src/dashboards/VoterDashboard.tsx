@@ -112,10 +112,8 @@ export default function VoterDashboard() {
     }
   };
 
-  const getVotedCandidate = (electionId: string, position: string): string | null => {
-    const vote = userVotes.find(v => v.electionId === electionId && v.position === position);
-    return vote?.candidateId || null;
-  };
+  const getVotesForPosition = (electionId: string, position: string): VoteType[] =>
+    userVotes.filter(v => v.electionId === electionId && v.position === position);
 
   const handleLogout = async () => {
     await logout();
@@ -236,7 +234,7 @@ export default function VoterDashboard() {
                   election={selectedElection}
                   onBack={() => setSelectedElection(null)}
                   onSelectCandidate={handleSelectCandidate}
-                  getVotedCandidate={getVotedCandidate}
+                  getVotesForPosition={getVotesForPosition}
                 />
               ) : (
                 <ElectionsList
@@ -518,12 +516,12 @@ function VotingInterface({
   election,
   onBack,
   onSelectCandidate,
-  getVotedCandidate,
+  getVotesForPosition,
 }: {
   election: Election;
   onBack: () => void;
   onSelectCandidate: (position: string, candidateId: string) => void;
-  getVotedCandidate: (electionId: string, position: string) => string | null;
+  getVotesForPosition: (electionId: string, position: string) => VoteType[];
 }) {
   const [positions, setPositions] = useState<ElectionPosition[]>([]);
   const [candidatesByPosition, setCandidatesByPosition] = useState<Record<string, Candidate[]>>({});
@@ -571,46 +569,56 @@ function VotingInterface({
         {positions.map((position) => {
           const positionName = position.name;
           const candidates = candidatesByPosition[positionName] || [];
-          const votedCandidateId = getVotedCandidate(election.id, positionName);
-          const hasVotedForPosition = !!votedCandidateId;
+          const votesForPosition = getVotesForPosition(election.id, positionName);
+          const maxVotes = position.voteLimit;
+          const votedCandidateIds = new Set(votesForPosition.map((vote) => vote.candidateId));
+          const votesRemaining = Math.max(0, maxVotes - votesForPosition.length);
+          const hasReachedLimit = votesRemaining === 0;
 
           return (
             <div key={position.id} className="bg-white rounded-lg shadow border border-gray-200 p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-semibold text-[#1E3A8A]">{positionName}</h3>
-                {hasVotedForPosition && (
-                  <Badge className="bg-green-100 text-green-800">
-                    <CheckCircle className="w-3 h-3 mr-1" />
-                    Voted
-                  </Badge>
-                )}
+                <Badge className={hasReachedLimit ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'}>
+                  {votesForPosition.length}/{maxVotes} votes used
+                </Badge>
               </div>
 
-              {hasVotedForPosition ? (
-                <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+              {hasReachedLimit ? (
+                <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
                   <div className="flex items-center gap-3">
                     <CheckCircle className="w-6 h-6 text-green-600" />
                     <div>
                       <p className="font-medium text-green-800">
-                        You have voted for this position
+                        You reached the maximum votes for this position
                       </p>
                       <p className="text-sm text-green-600">
-                        Thank you for participating in the election!
+                        Limit: {maxVotes} candidate{maxVotes > 1 ? 's' : ''}.
                       </p>
                     </div>
                   </div>
                 </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {candidates.map((candidate) => (
-                    <CandidateCard
-                      key={candidate.id}
-                      candidate={candidate}
-                      onSelect={() => onSelectCandidate(positionName, candidate.id)}
-                    />
-                  ))}
+              ) : null}
+
+              {!hasReachedLimit && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+                  <p className="text-sm text-blue-800">
+                    You can still vote for <span className="font-semibold">{votesRemaining}</span> candidate{votesRemaining > 1 ? 's' : ''} in this position.
+                  </p>
                 </div>
               )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {candidates.map((candidate) => (
+                  <CandidateCard
+                    key={candidate.id}
+                    candidate={candidate}
+                    isVoted={votedCandidateIds.has(candidate.id)}
+                    disabled={hasReachedLimit || votedCandidateIds.has(candidate.id)}
+                    onSelect={() => onSelectCandidate(positionName, candidate.id)}
+                  />
+                ))}
+              </div>
             </div>
           );
         })}
@@ -624,16 +632,20 @@ function VotingInterface({
 // ============================================
 function CandidateCard({
   candidate,
+  isVoted,
+  disabled,
   onSelect,
 }: {
   candidate: Candidate;
+  isVoted: boolean;
+  disabled?: boolean;
   onSelect: () => void;
 }) {
   const [showDetails, setShowDetails] = useState(false);
   const [imageError, setImageError] = useState(false);
 
   return (
-    <div className="border border-gray-200 rounded-lg overflow-hidden hover:shadow-md transition-shadow">
+    <div className={`border border-gray-200 rounded-lg overflow-hidden transition-shadow ${disabled ? 'opacity-75' : 'hover:shadow-md'}`}>
       <div className="aspect-square bg-gray-100 relative">
         {(candidate.photoPath || candidate.photoUrl) && !imageError ? (
           <img
@@ -668,9 +680,10 @@ function CandidateCard({
           <Button
             className="w-full bg-[#2E7D32] hover:bg-[#1B5E20] rounded-md font-medium"
             onClick={onSelect}
+            disabled={disabled}
           >
             <Vote className="w-4 h-4 mr-2" />
-            Vote
+            {isVoted ? 'Already Voted' : disabled ? 'Unavailable' : 'Vote'}
           </Button>
         </div>
         {showDetails && candidate.platform && (

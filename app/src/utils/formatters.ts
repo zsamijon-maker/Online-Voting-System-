@@ -141,6 +141,7 @@ export function getInitials(firstName: string, lastName: string): string {
 export function formatElectionType(type: string): string {
   const typeMap: Record<string, string> = {
     student_government: 'Student Government',
+    fstlp_officers: 'FSTLP Officers',
     class_representative: 'Class Representative',
     club_officers: 'Club Officers',
     other: 'Other',

@@ -23,6 +23,43 @@ const normalizeGender = (value) => {
   return undefined;
 };
 
+const isRankingByGender = (scoringMethod) => scoringMethod === 'ranking_by_gender';
+
+const buildContestantNumberConflictMessage = (scoringMethod) => {
+  if (isRankingByGender(scoringMethod)) {
+    return 'Contestant number is already used for this gender in this pageant.';
+  }
+
+  return 'Contestant number is already used in this pageant.';
+};
+
+const hasContestantNumberConflict = async ({
+  pageantId,
+  contestantNumber,
+  gender,
+  scoringMethod,
+  excludeContestantId,
+}) => {
+  let query = supabase
+    .from('contestants')
+    .select('id', { head: true, count: 'exact' })
+    .eq('pageant_id', pageantId)
+    .eq('contestant_number', contestantNumber);
+
+  if (excludeContestantId) {
+    query = query.neq('id', excludeContestantId);
+  }
+
+  if (isRankingByGender(scoringMethod)) {
+    query = query.eq('gender', gender);
+  }
+
+  const { count, error } = await query;
+  if (error) throw error;
+
+  return (count ?? 0) > 0;
+};
+
 // GET /api/pageants/:pageantId/contestants
 export const getContestants = async (req, res) => {
   const { data, error } = await supabase
@@ -48,7 +85,8 @@ export const getContestantById = async (req, res) => {
 // POST /api/pageants/:pageantId/contestants
 export const createContestant = async (req, res) => {
   const { contestantNumber, firstName, lastName, bio, age, department, photoUrl, gender } = req.body;
-  if (!contestantNumber || !firstName || !lastName) {
+  const parsedContestantNumber = parseNumber(contestantNumber);
+  if (!parsedContestantNumber || parsedContestantNumber < 1 || !firstName || !lastName) {
     return res.status(400).json({ error: 'contestantNumber, firstName, and lastName are required.' });
   }
 
@@ -71,11 +109,22 @@ export const createContestant = async (req, res) => {
     return res.status(400).json({ error: 'gender is required for pageants using ranking_by_gender.' });
   }
 
+  const hasConflict = await hasContestantNumberConflict({
+    pageantId: req.params.pageantId,
+    contestantNumber: parsedContestantNumber,
+    gender: normalizedGender,
+    scoringMethod: pageant.scoring_method,
+  });
+
+  if (hasConflict) {
+    return res.status(409).json({ error: buildContestantNumberConflictMessage(pageant.scoring_method) });
+  }
+
   const { data, error } = await supabase
     .from('contestants')
     .insert({
       pageant_id: req.params.pageantId,
-      contestant_number: contestantNumber,
+      contestant_number: parsedContestantNumber,
       first_name: firstName,
       last_name: lastName,
       bio: bio || null,
@@ -88,6 +137,9 @@ export const createContestant = async (req, res) => {
     .select()
     .single();
 
+  if (error?.code === '23505') {
+    return res.status(409).json({ error: buildContestantNumberConflictMessage(pageant.scoring_method) });
+  }
   if (error) throw error;
 
   if (req.file) {
@@ -116,7 +168,13 @@ export const createContestant = async (req, res) => {
 export const updateContestant = async (req, res) => {
   const { contestantNumber, firstName, lastName, bio, age, department, photoUrl, isActive, gender } = req.body;
   const updates = {};
-  if (contestantNumber !== undefined) updates.contestant_number = contestantNumber;
+  if (contestantNumber !== undefined) {
+    const parsedContestantNumber = parseNumber(contestantNumber);
+    if (!parsedContestantNumber || parsedContestantNumber < 1) {
+      return res.status(400).json({ error: 'contestantNumber must be a positive number.' });
+    }
+    updates.contestant_number = parsedContestantNumber;
+  }
   if (firstName !== undefined) updates.first_name = firstName;
   if (lastName !== undefined) updates.last_name = lastName;
   if (bio !== undefined) updates.bio = bio;
@@ -142,20 +200,39 @@ export const updateContestant = async (req, res) => {
     return res.status(404).json({ error: 'Pageant not found.' });
   }
 
-  if (pageant.scoring_method === 'ranking_by_gender' && updates.gender === null) {
+  const { data: existingContestant, error: existingContestantError } = await supabase
+    .from('contestants')
+    .select('id, contestant_number, gender, photo_path')
+    .eq('id', req.params.id)
+    .eq('pageant_id', req.params.pageantId)
+    .single();
+
+  if (existingContestantError || !existingContestant) {
+    return res.status(404).json({ error: 'Contestant not found.' });
+  }
+
+  const hasExplicitGenderUpdate = Object.prototype.hasOwnProperty.call(updates, 'gender');
+  const resolvedGender = hasExplicitGenderUpdate ? updates.gender : existingContestant.gender;
+
+  if (pageant.scoring_method === 'ranking_by_gender' && !resolvedGender) {
     return res.status(400).json({ error: 'gender is required for pageants using ranking_by_gender.' });
+  }
+
+  const resolvedContestantNumber = updates.contestant_number ?? existingContestant.contestant_number;
+  const hasConflict = await hasContestantNumberConflict({
+    pageantId: req.params.pageantId,
+    contestantNumber: resolvedContestantNumber,
+    gender: resolvedGender,
+    scoringMethod: pageant.scoring_method,
+    excludeContestantId: req.params.id,
+  });
+
+  if (hasConflict) {
+    return res.status(409).json({ error: buildContestantNumberConflictMessage(pageant.scoring_method) });
   }
 
   if (req.file) {
     try {
-      const { data: existing, error: existingError } = await supabase
-        .from('contestants')
-        .select('photo_path')
-        .eq('id', req.params.id)
-        .single();
-
-      if (existingError) throw existingError;
-
       const uploaded = await uploadEntityImage({
         folder: 'contestants',
         recordId: req.params.id,
@@ -165,9 +242,9 @@ export const updateContestant = async (req, res) => {
 
       updates.photo_path = uploaded.publicUrl;
 
-      if (existing?.photo_path && existing.photo_path !== uploaded.publicUrl) {
+      if (existingContestant.photo_path && existingContestant.photo_path !== uploaded.publicUrl) {
         try {
-          await deleteEntityImageByPublicUrl(existing.photo_path);
+          await deleteEntityImageByPublicUrl(existingContestant.photo_path);
         } catch (deleteErr) {
           console.warn('Warning: Failed to delete old image:', deleteErr.message);
           // Don't fail the entire update if deletion fails
@@ -183,9 +260,13 @@ export const updateContestant = async (req, res) => {
     .from('contestants')
     .update(updates)
     .eq('id', req.params.id)
+    .eq('pageant_id', req.params.pageantId)
     .select()
     .single();
 
+  if (error?.code === '23505') {
+    return res.status(409).json({ error: buildContestantNumberConflictMessage(pageant.scoring_method) });
+  }
   if (error) throw error;
   res.json(data);
 };

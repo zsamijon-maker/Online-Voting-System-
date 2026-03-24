@@ -2,25 +2,36 @@ import { supabase } from '../lib/supabaseClient.js';
 import { isAdmin, assertRole } from '../lib/roleUtils.js';
 import { writeAuditLog } from '../lib/auditLogger.js';
 
-const STUDENT_GOVERNMENT_POSITIONS = Object.freeze([
-  { position_name: 'President', max_vote: 1 },
-  { position_name: 'Vice President', max_vote: 1 },
-  { position_name: 'Senators', max_vote: 12 },
-]);
+const PREDEFINED_ELECTION_POSITIONS = Object.freeze({
+  student_government: [
+    { position_name: 'President', max_vote: 1 },
+    { position_name: 'Vice President', max_vote: 1 },
+    { position_name: 'Senators', max_vote: 12 },
+  ],
+  fstlp_officers: [
+    { position_name: 'President', max_vote: 1 },
+    { position_name: 'Vice President', max_vote: 1 },
+    { position_name: 'Secretary', max_vote: 1 },
+    { position_name: 'Treasurer', max_vote: 1 },
+    { position_name: 'Auditor', max_vote: 1 },
+    { position_name: 'PIO', max_vote: 2 },
+    { position_name: 'Board Members', max_vote: 6 },
+  ],
+});
 
-const isStudentGovernmentElection = (type) => type === 'student_government';
+const isPredefinedPositionsElection = (type) => Boolean(PREDEFINED_ELECTION_POSITIONS[type]);
 
-const buildStudentGovernmentPositions = (electionId) =>
-  STUDENT_GOVERNMENT_POSITIONS.map((position) => ({
+const buildPredefinedPositions = (electionId, type) =>
+  (PREDEFINED_ELECTION_POSITIONS[type] || []).map((position) => ({
     election_id: electionId,
     position_name: position.position_name,
     max_vote: position.max_vote,
   }));
 
 const createElectionPositions = async (electionId, type) => {
-  if (!isStudentGovernmentElection(type)) return [];
+  if (!isPredefinedPositionsElection(type)) return [];
 
-  const positions = buildStudentGovernmentPositions(electionId);
+  const positions = buildPredefinedPositions(electionId, type);
   const { data, error } = await supabase
     .from('election_positions')
     .insert(positions)
@@ -155,7 +166,7 @@ export const createElection = async (req, res) => {
       end_date: endDate,
       created_by: req.user.id,
       allow_write_ins: allowWriteIns ?? false,
-      max_votes_per_voter: isStudentGovernmentElection(type) ? 1 : (maxVotesPerVoter ?? 1),
+      max_votes_per_voter: isPredefinedPositionsElection(type) ? 1 : (maxVotesPerVoter ?? 1),
       results_public: resultsPublic ?? false,
     })
     .select()

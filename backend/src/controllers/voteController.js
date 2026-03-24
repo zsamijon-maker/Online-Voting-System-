@@ -2,10 +2,15 @@ import { supabase } from '../lib/supabaseClient.js';
 import crypto from 'crypto';
 import { hasRole } from '../lib/roleUtils.js';
 
-const STUDENT_GOV_POSITION_LIMITS = Object.freeze({
+const LEGACY_POSITION_LIMITS = Object.freeze({
   President: 1,
   'Vice President': 1,
   Senators: 12,
+  Secretary: 1,
+  Treasurer: 1,
+  Auditor: 1,
+  PIO: 2,
+  'Board Members': 6,
 });
 
 // Only transition time-window states automatically; keep terminal states stable once set manually.
@@ -33,7 +38,7 @@ const resolvePositionVoteLimit = async ({ electionId, positionId, legacyPosition
   }
 
   // Legacy fallback for pre-migration records without position_id.
-  return STUDENT_GOV_POSITION_LIMITS[legacyPosition] ?? 1;
+  return LEGACY_POSITION_LIMITS[legacyPosition] ?? 1;
 };
 
 const generateVoteHash = (voterId, electionId, candidateId, position) => {

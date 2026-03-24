@@ -1,8 +1,9 @@
 import { supabase } from './supabaseClient.js';
 
 const BUCKET_MAP = {
-  candidates: ['candidate-photos', 'candidate-images'],
-  contestants: ['contestant-photos', 'candidate-images'],
+  // The frontend renders direct public URLs, so prefer the known public bucket first.
+  candidates: ['candidate-images', 'candidate-photos'],
+  contestants: ['candidate-images', 'contestant-photos'],
 };
 
 function getBucketCandidates(folder) {

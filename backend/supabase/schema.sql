@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS elections (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   title TEXT NOT NULL,
   description TEXT,
-  type TEXT NOT NULL CHECK (type IN ('student_government', 'class_representative', 'club_officers', 'other')),
+  type TEXT NOT NULL CHECK (type IN ('student_government', 'fstlp_officers', 'class_representative', 'club_officers', 'other')),
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'upcoming', 'active', 'closed', 'archived')),
   start_date TIMESTAMPTZ NOT NULL,
   end_date TIMESTAMPTZ NOT NULL,
@@ -119,9 +119,11 @@ CREATE TABLE IF NOT EXISTS contestants (
   department TEXT,
   gender TEXT CHECK (gender IN ('Male', 'Female')),
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (pageant_id, contestant_number)
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS contestants_pageant_number_gender_scope_key
+ON contestants (pageant_id, contestant_number, COALESCE(gender, '__NO_GENDER__'));
 
 -- ============================================
 -- CRITERIA TABLE

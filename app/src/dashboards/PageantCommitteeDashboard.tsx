@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { useState, useEffect, useMemo, useCallback, Fragment } from 'react';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LabelList } from 'recharts';
 import {
   Crown,
   Users,
@@ -21,6 +21,10 @@ import {
   LogOut,
   Menu,
   X,
+  ChevronDown,
+  ChevronUp,
+  Trophy,
+  Medal,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNotification } from '@/contexts/NotificationContext';
@@ -104,6 +108,7 @@ export default function PageantCommitteeDashboard() {
   const [rankingTieBreaker, setRankingTieBreaker] = useState<'weighted_criteria' | 'judge_priority' | 'keep_tied'>('keep_tied');
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [selectedContestant, setSelectedContestant] = useState<Contestant | null>(null);
+  const [contestantsRefreshTick, setContestantsRefreshTick] = useState(0);
 
   const fetchPageants = useCallback(async () => {
     const allPageants = await getAllPageants();
@@ -208,12 +213,18 @@ export default function PageantCommitteeDashboard() {
   };
 
   const handleAddContestant = async (pageantId: string, data: ContestantFormData) => {
-    await addContestant(pageantId, data);
-    showSuccess('Contestant added successfully');
-    setIsContestantModalOpen(false);
-    setSelectedPageant(null);
-    setSelectedContestant(null);
-    void fetchPageants();
+    try {
+      await addContestant(pageantId, data);
+      showSuccess('Contestant added successfully');
+      setContestantsRefreshTick((prev) => prev + 1);
+      setIsContestantModalOpen(false);
+      setSelectedPageant(null);
+      setSelectedContestant(null);
+      void fetchPageants();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to add contestant';
+      showError(message);
+    }
   };
 
   const handleUpdateContestant = async (pageantId: string, contestantId: string, data: ContestantFormData) => {
@@ -236,6 +247,7 @@ export default function PageantCommitteeDashboard() {
     }
 
     showSuccess('Contestant updated successfully');
+    setContestantsRefreshTick((prev) => prev + 1);
     setIsEditContestantModalOpen(false);
     setSelectedPageant(null);
     setSelectedContestant(null);
@@ -253,6 +265,7 @@ export default function PageantCommitteeDashboard() {
     }
 
     showSuccess('Contestant removed successfully');
+    setContestantsRefreshTick((prev) => prev + 1);
     void fetchPageants();
   };
 
@@ -424,6 +437,7 @@ export default function PageantCommitteeDashboard() {
             <TabsContent value="contestants">
               <ContestantsTab
                 pageants={pageants}
+                refreshTick={contestantsRefreshTick}
                 onAddContestant={(pageant) => {
                   setSelectedPageant(pageant);
                   setSelectedContestant(null);
@@ -645,7 +659,11 @@ export default function PageantCommitteeDashboard() {
               </Select>
             </div>
           )}
-          <PageantResultsDisplay results={results} scoringMethod={selectedPageant?.scoringMethod} />
+          <PageantResultsDisplay
+            results={results}
+            scoringMethod={selectedPageant?.scoringMethod}
+            pageant={selectedPageant}
+          />
         </DialogContent>
       </Dialog>
     </div>
@@ -910,11 +928,13 @@ function PageantsTab({
 // ============================================
 function ContestantsTab({
   pageants,
+  refreshTick,
   onAddContestant,
   onEditContestant,
   onDeleteContestant,
 }: {
   pageants: Pageant[];
+  refreshTick: number;
   onAddContestant: (pageant: Pageant) => void;
   onEditContestant: (pageant: Pageant, contestant: Contestant) => void;
   onDeleteContestant: (pageantId: string, contestant: Contestant) => void;
@@ -935,7 +955,7 @@ function ContestantsTab({
       .catch(() => { if (mounted) setContestants([]); })
       .finally(() => { if (mounted) setLoadingContestants(false); });
     return () => { mounted = false; };
-  }, [selectedPageantId]);
+  }, [selectedPageantId, refreshTick]);
 
   return (
     <div className="space-y-6">
@@ -1923,69 +1943,314 @@ function AssignJudgeForm({
 function PageantResultsDisplay({
   results,
   scoringMethod,
+  pageant,
 }: {
   results: PageantResultsResponse;
   scoringMethod?: Pageant['scoringMethod'];
+  pageant?: Pageant | null;
 }) {
-  const renderRankingDivision = (title: string, divisionResults: PageantResult[], winnerLabel: string, winner: PageantResult | null) => (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between gap-3">
-        <h5 className="font-semibold text-gray-900">{title}</h5>
-        <div className="text-sm text-gray-600">
-          {winner ? (
-            <span className="font-medium text-yellow-700">{winnerLabel}: {winner.contestantName}</span>
-          ) : (
-            <span className="text-gray-500">No winner yet</span>
-          )}
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+
+  const toggleRow = (id: string) => {
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const resolvedScoringMode = (firstResult?: PageantResult) =>
+    firstResult?.scoringMode ||
+    (scoringMethod === 'average'
+      ? 'AVERAGE'
+      : scoringMethod === 'ranking'
+      ? 'RANKING'
+      : scoringMethod === 'ranking_by_gender'
+      ? 'RANKING_BY_GENDER'
+      : 'WEIGHTED_MEAN');
+
+  const rankBadge = (rank: number) => {
+    if (rank === 1) return <span className="inline-flex items-center gap-1 rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-semibold text-yellow-800"><Trophy className="h-3 w-3" /> Gold</span>;
+    if (rank === 2) return <span className="inline-flex items-center gap-1 rounded-full bg-gray-200 px-2 py-0.5 text-xs font-semibold text-gray-700"><Medal className="h-3 w-3" /> Silver</span>;
+    if (rank === 3) return <span className="inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700"><Medal className="h-3 w-3" /> Bronze</span>;
+    return null;
+  };
+
+  const rowScoreDisplay = (result: PageantResult, mode: 'AVERAGE' | 'WEIGHTED_MEAN' | 'RANKING') => {
+    if (mode === 'AVERAGE') {
+      const score = result.finalScore ?? result.totalScore;
+      return { finalScore: `${score.toFixed(2)} / 10`, additional: 'Final score (/10)' };
+    }
+
+    if (mode === 'RANKING') {
+      return {
+        finalScore: `Rank #${result.rank}`,
+        additional: `Average rank: ${(result.rankScore ?? result.totalScore).toFixed(2)}`,
+      };
+    }
+
+    return {
+      finalScore: `${(result.finalPercentage ?? result.weightedScore).toFixed(2)}%`,
+      additional: `Final rating: ${(result.finalRating ?? result.totalScore).toFixed(2)} / 10`,
+    };
+  };
+
+  const chartDataFor = (list: PageantResult[], mode: 'AVERAGE' | 'WEIGHTED_MEAN' | 'RANKING') => {
+    const maxRank = Math.max(...list.map((r) => r.rank), 1);
+    return list.map((r) => {
+      if (mode === 'AVERAGE') {
+        const pct = ((r.finalScore ?? r.totalScore) / 10) * 100;
+        return { name: `#${r.contestantNumber}`, fullName: r.contestantName, value: Number(pct.toFixed(2)), label: `${pct.toFixed(1)}%` };
+      }
+
+      if (mode === 'RANKING') {
+        const pct = maxRank === 1 ? 100 : ((maxRank - r.rank) / (maxRank - 1)) * 100;
+        return { name: `#${r.contestantNumber}`, fullName: r.contestantName, value: Number(pct.toFixed(2)), label: `#${r.rank}` };
+      }
+
+      const pct = r.finalPercentage ?? r.weightedScore;
+      return { name: `#${r.contestantNumber}`, fullName: r.contestantName, value: Number(pct.toFixed(2)), label: `${pct.toFixed(1)}%` };
+    });
+  };
+
+  const sortResultsByMode = (list: PageantResult[], mode: 'AVERAGE' | 'WEIGHTED_MEAN' | 'RANKING') => {
+    const sorted = [...list];
+
+    if (mode === 'RANKING') {
+      sorted.sort((a, b) => a.rank - b.rank);
+      return sorted;
+    }
+
+    if (mode === 'AVERAGE') {
+      sorted.sort((a, b) => (b.finalScore ?? b.totalScore) - (a.finalScore ?? a.totalScore));
+      return sorted;
+    }
+
+    sorted.sort((a, b) => (b.finalPercentage ?? b.weightedScore) - (a.finalPercentage ?? a.weightedScore));
+    return sorted;
+  };
+
+  const renderComparisonChart = (
+    title: string,
+    list: PageantResult[],
+    mode: 'AVERAGE' | 'WEIGHTED_MEAN' | 'RANKING'
+  ) => {
+    if (list.length === 0) {
+      return (
+        <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-4 text-sm text-gray-500">
+          No contestants in this section.
+        </div>
+      );
+    }
+
+    const chartData = chartDataFor(sortResultsByMode(list, mode), mode);
+
+    return (
+      <div className="rounded-lg border border-gray-200 bg-white p-4">
+        <div className="mb-2 flex items-center justify-between">
+          <h5 className="font-semibold text-gray-900">{title}</h5>
+          <p className="text-xs text-gray-500">
+            {mode === 'RANKING' ? 'Higher bar means better rank (lower is better).' : 'Higher bar means better score.'}
+          </p>
+        </div>
+        <ResponsiveContainer width="100%" height={260}>
+          <BarChart data={chartData} margin={{ top: 18, right: 12, left: 0, bottom: 0 }}>
+            <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+            <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
+            <Tooltip
+              formatter={(value: number, _name, item) => [
+                mode === 'RANKING' ? `${item.payload.label} (${value.toFixed(1)}%)` : `${value.toFixed(1)}%`,
+                item.payload.fullName,
+              ]}
+            />
+            <Bar dataKey="value" fill="#1E3A8A" radius={[6, 6, 0, 0]}>
+              <LabelList dataKey="label" position="top" fill="#1F2937" fontSize={11} />
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+        <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-gray-600 sm:grid-cols-3 lg:grid-cols-4">
+          {chartData.map((row) => (
+            <div key={row.fullName} className="rounded border border-gray-200 bg-gray-50 px-2 py-1">
+              <span className="font-medium text-gray-800">{row.name}</span> {row.label}
+            </div>
+          ))}
         </div>
       </div>
+    );
+  };
 
-      {divisionResults.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-4 text-sm text-gray-500">
-          No contestants in this category.
+  const renderDetails = (result: PageantResult) => {
+    const judgeScoreRows = (result.judgeScores || []).map((j) => ({
+      name: j.judgeLabel,
+      value: Number(j.percentage.toFixed(2)),
+    }));
+
+    return (
+      <div className="space-y-4 bg-[#F8FAFC] p-4">
+        <div className="rounded-lg border border-gray-200 bg-white p-3">
+          <h6 className="mb-3 text-sm font-semibold text-gray-900">Judge Scores</h6>
+          {judgeScoreRows.length === 0 ? (
+            <p className="text-sm text-gray-500">No judge score breakdown available.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={judgeScoreRows} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
+                <Tooltip formatter={(v: number) => [`${v.toFixed(2)}%`, 'Score']} />
+                <Bar dataKey="value" fill="#2E7D32" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
         </div>
-      ) : (
-        <div className="overflow-x-auto rounded-lg border border-gray-200">
-          <table className="w-full min-w-[640px] text-sm">
+
+        <div className="rounded-lg border border-gray-200 bg-white p-3">
+          <h6 className="mb-3 text-sm font-semibold text-gray-900">Criteria Breakdown</h6>
+          <div className="overflow-x-auto">
+            <table className="min-w-[720px] w-full text-sm">
+              <thead className="bg-gray-50 text-gray-700">
+                <tr>
+                  <th className="px-3 py-2 text-left font-medium">Criteria</th>
+                  <th className="px-3 py-2 text-right font-medium">Score</th>
+                  <th className="px-3 py-2 text-right font-medium">Max Score</th>
+                  <th className="px-3 py-2 text-right font-medium">Weight</th>
+                  <th className="px-3 py-2 text-right font-medium">Computed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.criteriaBreakdown.map((c) => (
+                  <tr key={c.criteriaId} className="border-t border-gray-100">
+                    <td className="px-3 py-2 text-gray-800">{c.criteriaName}</td>
+                    <td className="px-3 py-2 text-right text-gray-700">{c.averageScore.toFixed(2)}</td>
+                    <td className="px-3 py-2 text-right text-gray-700">{(c.maxScore ?? 10).toFixed(2)}</td>
+                    <td className="px-3 py-2 text-right text-gray-700">{c.weight.toFixed(2)}%</td>
+                    <td className="px-3 py-2 text-right font-medium text-gray-900">{(c.computed ?? c.weightedContribution).toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderRankingTable = (
+    title: string,
+    list: PageantResult[],
+    mode: 'AVERAGE' | 'WEIGHTED_MEAN' | 'RANKING'
+  ) => {
+    if (list.length === 0) {
+      return (
+        <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-4 text-sm text-gray-500">
+          No contestants in this section.
+        </div>
+      );
+    }
+
+    const sortedList = sortResultsByMode(list, mode);
+
+    return (
+      <div className="rounded-lg border border-gray-200 bg-white">
+        <div className="border-b border-gray-200 px-4 py-3">
+          <h5 className="font-semibold text-gray-900">{title}</h5>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[900px] text-sm">
             <thead className="bg-gray-50 text-gray-700">
               <tr>
                 <th className="px-3 py-2 text-left font-medium">Rank</th>
                 <th className="px-3 py-2 text-left font-medium">Contestant</th>
-                <th className="px-3 py-2 text-right font-medium">Average Rank</th>
-                <th className="px-3 py-2 text-right font-medium">Judges</th>
+                <th className="px-3 py-2 text-right font-medium">Final Score</th>
+                <th className="px-3 py-2 text-right font-medium">Additional Info</th>
+                <th className="px-3 py-2 text-center font-medium">Details</th>
               </tr>
             </thead>
             <tbody>
-              {divisionResults.map((result) => (
-                <tr key={result.contestantId} className="border-t border-gray-100">
-                  <td className="px-3 py-2 font-semibold text-gray-800">#{result.rank}</td>
-                  <td className="px-3 py-2">
-                    <div className="flex items-center gap-3">
-                      {result.photoPath || result.photoUrl ? (
-                        <img
-                          src={result.photoPath || result.photoUrl}
-                          alt={result.contestantName}
-                          className="w-9 h-9 rounded-full object-cover"
-                        />
-                      ) : (
-                        <div className="w-9 h-9 rounded-full bg-[#1E3A8A] flex items-center justify-center text-white font-medium">
-                          {result.contestantName.charAt(0)}
+              {sortedList.map((result) => {
+                const expanded = expandedRows.has(result.contestantId);
+                const score = rowScoreDisplay(result, mode);
+                const topRowClass =
+                  result.rank === 1
+                    ? 'bg-yellow-50'
+                    : result.rank === 2
+                    ? 'bg-gray-50'
+                    : result.rank === 3
+                    ? 'bg-orange-50'
+                    : 'bg-white';
+
+                return (
+                  <Fragment key={result.contestantId}>
+                    <tr
+                      className={`border-t border-gray-100 ${topRowClass} cursor-pointer hover:bg-blue-50/40`}
+                      onClick={() => toggleRow(result.contestantId)}
+                    >
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-gray-900">#{result.rank}</span>
+                          {rankBadge(result.rank)}
                         </div>
-                      )}
-                      <div>
-                        <p className="font-medium text-gray-900">{result.contestantName}</p>
-                        <p className="text-xs text-gray-500">Contestant #{result.contestantNumber}</p>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-right text-gray-800">{(result.rankScore ?? result.totalScore).toFixed(2)}</td>
-                  <td className="px-3 py-2 text-right text-gray-700">{result.judgeScores?.length ?? 0}</td>
-                </tr>
-              ))}
+                      </td>
+                      <td className="px-3 py-2">
+                        <div className="flex items-center gap-3">
+                          {result.photoPath || result.photoUrl ? (
+                            <img
+                              src={result.photoPath || result.photoUrl}
+                              alt={result.contestantName}
+                              className="h-10 w-10 rounded-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#1E3A8A] text-white font-medium">
+                              {result.contestantName.charAt(0)}
+                            </div>
+                          )}
+                          <div>
+                            <p className="font-medium text-gray-900">{result.contestantName}</p>
+                            <p className="text-xs text-gray-500">Contestant #{result.contestantNumber}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-right font-semibold text-gray-900">{score.finalScore}</td>
+                      <td className="px-3 py-2 text-right text-gray-700">{score.additional}</td>
+                      <td className="px-3 py-2 text-center text-gray-600">
+                        {expanded ? <ChevronUp className="mx-auto h-4 w-4" /> : <ChevronDown className="mx-auto h-4 w-4" />}
+                      </td>
+                    </tr>
+                    {expanded ? (
+                      <tr className="border-t border-gray-100">
+                        <td colSpan={5}>{renderDetails(result)}</td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>
-      )}
+      </div>
+    );
+  };
+
+  const renderHeader = (totalContestants: number, sectionLabel: string) => (
+    <div className="rounded-lg border border-gray-200 bg-white p-4">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <div>
+          <p className="text-xs uppercase tracking-wide text-gray-500">Pageant</p>
+          <p className="mt-1 text-sm font-semibold text-gray-900">{pageant?.name || sectionLabel}</p>
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wide text-gray-500">Scoring Method</p>
+          <p className="mt-1 text-sm font-semibold text-gray-900">{formatScoringMethod(scoringMethod || 'weighted')}</p>
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wide text-gray-500">Total Contestants</p>
+          <p className="mt-1 text-sm font-semibold text-gray-900">{totalContestants}</p>
+        </div>
+        <div>
+          <p className="text-xs uppercase tracking-wide text-gray-500">Status</p>
+          <p className="mt-1 text-sm font-semibold text-gray-900">{pageant?.status ? formatPageantStatus(pageant.status) : 'Completed'}</p>
+        </div>
+      </div>
     </div>
   );
 
@@ -1999,120 +2264,41 @@ function PageantResultsDisplay({
       );
     }
 
-    const scoringMode =
-      results[0].scoringMode ||
-      (scoringMethod === 'average'
-        ? 'AVERAGE'
-        : scoringMethod === 'ranking'
-        ? 'RANKING'
-        : 'WEIGHTED_MEAN');
-
-    const getWinnerSummary = (result: PageantResult) => {
-      if (scoringMode === 'AVERAGE') {
-        return `Contestant #${result.contestantNumber} • Final Score: ${(result.finalScore ?? result.totalScore).toFixed(2)} / 10`;
-      }
-
-      if (scoringMode === 'RANKING') {
-        return `Contestant #${result.contestantNumber} • Final Rank: #${result.rank} • Rank Score: ${(result.rankScore ?? result.totalScore).toFixed(2)}`;
-      }
-
-      return `Contestant #${result.contestantNumber} • Final Percentage: ${(result.finalPercentage ?? result.weightedScore).toFixed(2)}% • Final Rating: ${(result.finalRating ?? result.totalScore).toFixed(2)} / 10`;
-    };
-
-    const getRowScoreLabels = (result: PageantResult) => {
-      if (scoringMode === 'AVERAGE') {
-        return {
-          primary: `${(result.finalScore ?? result.totalScore).toFixed(2)} / 10`,
-          secondary: 'Final Score',
-        };
-      }
-
-      if (scoringMode === 'RANKING') {
-        return {
-          primary: `#${result.rank}`,
-          secondary: `Rank Score: ${(result.rankScore ?? result.totalScore).toFixed(2)}`,
-        };
-      }
-
-      return {
-        primary: `${(result.finalPercentage ?? result.weightedScore).toFixed(2)}%`,
-        secondary: `Final Rating: ${(result.finalRating ?? result.totalScore).toFixed(2)} / 10`,
-      };
-    };
+    const mode = resolvedScoringMode(results[0]);
+    const baseMode = mode === 'RANKING' ? 'RANKING' : mode === 'AVERAGE' ? 'AVERAGE' : 'WEIGHTED_MEAN';
+    const sortedOverall = sortResultsByMode(results, baseMode);
+    const winner = sortedOverall[0];
+    const firstRunnerUp = sortedOverall[1] || null;
+    const secondRunnerUp = sortedOverall[2] || null;
 
     return (
       <div className="space-y-6">
-        <div className="bg-gradient-to-r from-yellow-50 to-orange-50 border border-yellow-200 rounded-lg p-4">
-          <h4 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-            <Crown className="w-5 h-5 text-yellow-600" />
-            Winner: {results[0].contestantName}
+        {renderHeader(results.length, 'Overall Results')}
+
+        <div className="rounded-lg border border-yellow-200 bg-gradient-to-r from-yellow-50 to-orange-50 p-4">
+          <h4 className="flex items-center gap-2 text-lg font-semibold text-gray-900">
+            <Crown className="h-5 w-5 text-yellow-600" />
+            Winner: {winner.contestantName}
           </h4>
-          <p className="text-gray-600 mt-1">
-            {getWinnerSummary(results[0])}
-          </p>
+          <p className="mt-1 text-sm text-gray-700">{rowScoreDisplay(winner, baseMode).finalScore}</p>
+          <div className="mt-3 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+            <p className="rounded border border-yellow-200 bg-white px-3 py-2 text-gray-700">
+              1st Runner-up: <span className="font-medium text-gray-900">{firstRunnerUp?.contestantName || 'N/A'}</span>
+            </p>
+            <p className="rounded border border-yellow-200 bg-white px-3 py-2 text-gray-700">
+              2nd Runner-up: <span className="font-medium text-gray-900">{secondRunnerUp?.contestantName || 'N/A'}</span>
+            </p>
+          </div>
         </div>
 
-        <div className="space-y-3">
-          <h5 className="font-medium text-gray-900">Full Rankings</h5>
-          {results.map((result) => {
-            const labels = getRowScoreLabels(result);
-
-            return (
-              <div
-                key={result.contestantId}
-                className={`flex items-center gap-4 p-3 rounded-lg ${
-                  result.rank === 1
-                    ? 'bg-yellow-50 border border-yellow-200'
-                    : result.rank === 2
-                    ? 'bg-gray-50 border border-gray-200'
-                    : result.rank === 3
-                    ? 'bg-orange-50 border border-orange-200'
-                    : 'bg-white border border-gray-200'
-                }`}
-              >
-                <div className={`w-8 text-center font-bold ${
-                  result.rank === 1 ? 'text-yellow-600' :
-                  result.rank === 2 ? 'text-gray-600' :
-                  result.rank === 3 ? 'text-orange-600' :
-                  'text-gray-400'
-                }`}>
-                  #{result.rank}
-                </div>
-                <div className="flex-1">
-                  <div className="flex items-center gap-3">
-                    {result.photoPath || result.photoUrl ? (
-                      <img
-                        src={result.photoPath || result.photoUrl}
-                        alt={result.contestantName}
-                        className="w-10 h-10 rounded-full object-cover"
-                      />
-                    ) : (
-                      <div className="w-10 h-10 rounded-full bg-[#1E3A8A] flex items-center justify-center text-white font-medium">
-                        {result.contestantName.charAt(0)}
-                      </div>
-                    )}
-                    <div>
-                      <p className="font-medium text-gray-900">{result.contestantName}</p>
-                      <p className="text-sm text-gray-500">
-                        Contestant #{result.contestantNumber}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p className="font-semibold text-gray-900">{labels.primary}</p>
-                  <p className="text-xs text-gray-500">{labels.secondary}</p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        {renderRankingTable('Ranking Table', results, baseMode)}
+        {renderComparisonChart('Comparison Chart', results, baseMode)}
       </div>
     );
   }
 
-  const hasNoDivisionResults = results.maleResults.length === 0 && results.femaleResults.length === 0;
-  if (hasNoDivisionResults) {
+  const totalContestants = results.maleResults.length + results.femaleResults.length;
+  if (totalContestants === 0) {
     return (
       <div className="text-center py-8">
         <BarChart3 className="w-12 h-12 text-gray-300 mx-auto mb-3" />
@@ -2123,23 +2309,36 @@ function PageantResultsDisplay({
 
   return (
     <div className="space-y-6">
-      {results.warnings && results.warnings.length > 0 && (
+      {renderHeader(totalContestants, 'Division Results')}
+
+      {results.warnings && results.warnings.length > 0 ? (
         <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           {results.warnings.join(' ')}
         </div>
-      )}
+      ) : null}
 
-      <div className="bg-gradient-to-r from-yellow-50 to-orange-50 border border-yellow-200 rounded-lg p-4 space-y-2">
-        <h4 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-          <Crown className="w-5 h-5 text-yellow-600" />
-          Division Winners
-        </h4>
-        <p className="text-gray-700 text-sm">Male Winner: {results.maleWinner?.contestantName || 'N/A'}</p>
-        <p className="text-gray-700 text-sm">Female Winner: {results.femaleWinner?.contestantName || 'N/A'}</p>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <div className="rounded-lg border border-yellow-200 bg-gradient-to-r from-yellow-50 to-orange-50 p-4">
+          <h4 className="flex items-center gap-2 text-lg font-semibold text-gray-900">
+            <Crown className="h-5 w-5 text-yellow-600" /> Male Winner
+          </h4>
+          <p className="mt-1 text-sm text-gray-700">{results.maleWinner?.contestantName || 'N/A'}</p>
+          {results.maleWinner ? <p className="text-sm font-medium text-gray-900">{rowScoreDisplay(results.maleWinner, 'RANKING').finalScore}</p> : null}
+        </div>
+        <div className="rounded-lg border border-yellow-200 bg-gradient-to-r from-yellow-50 to-orange-50 p-4">
+          <h4 className="flex items-center gap-2 text-lg font-semibold text-gray-900">
+            <Crown className="h-5 w-5 text-yellow-600" /> Female Winner
+          </h4>
+          <p className="mt-1 text-sm text-gray-700">{results.femaleWinner?.contestantName || 'N/A'}</p>
+          {results.femaleWinner ? <p className="text-sm font-medium text-gray-900">{rowScoreDisplay(results.femaleWinner, 'RANKING').finalScore}</p> : null}
+        </div>
       </div>
 
-      {renderRankingDivision('Male Division', results.maleResults, 'Male Winner', results.maleWinner)}
-      {renderRankingDivision('Female Division', results.femaleResults, 'Female Winner', results.femaleWinner)}
+      {renderRankingTable('Male Ranking Table', results.maleResults, 'RANKING')}
+      {renderComparisonChart('Male Division Comparison', results.maleResults, 'RANKING')}
+
+      {renderRankingTable('Female Ranking Table', results.femaleResults, 'RANKING')}
+      {renderComparisonChart('Female Division Comparison', results.femaleResults, 'RANKING')}
     </div>
   );
 }
