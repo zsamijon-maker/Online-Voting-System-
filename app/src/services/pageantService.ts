@@ -166,7 +166,25 @@ export async function validateCriteriaWeights(pageantId: string): Promise<{ vali
 
 export async function getPageantJudges(pageantId: string): Promise<PageantJudge[]> {
   const data = await api.get<unknown[]>(`/api/pageants/${pageantId}/judges`);
-  return camelize<PageantJudge[]>(data);
+  const judges = camelize<(PageantJudge & {
+    users?: { firstName?: string; lastName?: string } | Array<{ firstName?: string; lastName?: string }>;
+  })[]>(data);
+
+  return judges.map((judge) => {
+    if (judge.judgeName?.trim()) {
+      return judge;
+    }
+
+    const joinedUser = Array.isArray(judge.users) ? judge.users[0] : judge.users;
+    const firstName = joinedUser?.firstName?.trim() ?? '';
+    const lastName = joinedUser?.lastName?.trim() ?? '';
+    const fallbackJudgeName = `${firstName} ${lastName}`.trim() || 'Unknown';
+
+    return {
+      ...judge,
+      judgeName: fallbackJudgeName,
+    };
+  });
 }
 
 export async function isPageantJudge(pageantId: string, userId: string): Promise<boolean> {

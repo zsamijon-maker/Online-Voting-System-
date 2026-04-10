@@ -1,6 +1,7 @@
 import { supabase } from '../lib/supabaseClient.js';
 import { isAdmin, assertRole } from '../lib/roleUtils.js';
 import { writeAuditLog } from '../lib/auditLogger.js';
+import { logger } from '../lib/logger.js';
 
 // Only transition time-window states automatically; keep terminal states stable once set manually.
 const isAutoManagedPageantStatus = (status) => ['upcoming', 'active'].includes(status);
@@ -82,7 +83,7 @@ export const getPageants = async (req, res) => {
   try {
     await reconcilePageantStatuses();
   } catch (reconcileError) {
-    console.warn('[getPageants] status reconciliation skipped:', reconcileError?.message || reconcileError);
+    logger.warn('[getPageants] status reconciliation skipped:', reconcileError?.message || reconcileError);
   }
 
   if (String(assignedToMe).toLowerCase() === 'true') {
@@ -119,7 +120,7 @@ export const getPageantById = async (req, res) => {
   try {
     await reconcilePageantStatusById(req.params.id);
   } catch (reconcileError) {
-    console.warn('[getPageantById] status reconciliation skipped:', reconcileError?.message || reconcileError);
+    logger.warn('[getPageantById] status reconciliation skipped:', reconcileError?.message || reconcileError);
   }
 
   const { data, error } = await supabase
@@ -139,6 +140,10 @@ export const createPageant = async (req, res) => {
   const { name, description, eventDate, scoringMethod, totalWeight, resultsPublic } = req.body;
   if (!name || !eventDate || !scoringMethod) {
     return res.status(400).json({ error: 'name, eventDate, and scoringMethod are required.' });
+  }
+
+  if (resultsPublic === true && !isAdmin(req)) {
+    return res.status(403).json({ error: 'Only admins can publish pageant results.' });
   }
 
   // Automatically determine status based on event date
@@ -195,7 +200,12 @@ export const updatePageant = async (req, res) => {
   if (eventDate !== undefined) updates.event_date = eventDate;
   if (scoringMethod !== undefined) updates.scoring_method = scoringMethod;
   if (totalWeight !== undefined) updates.total_weight = totalWeight;
-  if (resultsPublic !== undefined) updates.results_public = resultsPublic;
+  if (resultsPublic !== undefined) {
+    if (!isAdmin(req)) {
+      return res.status(403).json({ error: 'Only admins can change pageant results visibility.' });
+    }
+    updates.results_public = resultsPublic;
+  }
 
   // If eventDate is being updated, recalculate status
   if (eventDate !== undefined) {

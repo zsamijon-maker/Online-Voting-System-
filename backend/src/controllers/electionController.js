@@ -1,6 +1,7 @@
 import { supabase } from '../lib/supabaseClient.js';
 import { isAdmin, assertRole } from '../lib/roleUtils.js';
 import { writeAuditLog } from '../lib/auditLogger.js';
+import { logger } from '../lib/logger.js';
 
 const PREDEFINED_ELECTION_POSITIONS = Object.freeze({
   student_government: [
@@ -99,7 +100,7 @@ export const getElections = async (req, res) => {
   try {
     await reconcileElectionStatuses();
   } catch (reconcileError) {
-    console.warn('[getElections] status reconciliation skipped:', reconcileError?.message || reconcileError);
+    logger.warn('[getElections] status reconciliation skipped:', reconcileError?.message || reconcileError);
   }
 
   let query = supabase.from('elections').select('*').order('created_at', { ascending: false });
@@ -150,6 +151,10 @@ export const createElection = async (req, res) => {
 
   if (!title || !type || !startDate || !endDate) {
     return res.status(400).json({ error: 'title, type, startDate, and endDate are required.' });
+  }
+
+  if (resultsPublic === true && !isAdmin(req)) {
+    return res.status(403).json({ error: 'Only admins can publish election results.' });
   }
 
   // Automatically determine status based on dates
@@ -204,7 +209,12 @@ export const updateElection = async (req, res) => {
   if (endDate !== undefined) updates.end_date = endDate;
   if (allowWriteIns !== undefined) updates.allow_write_ins = allowWriteIns;
   if (maxVotesPerVoter !== undefined) updates.max_votes_per_voter = maxVotesPerVoter;
-  if (resultsPublic !== undefined) updates.results_public = resultsPublic;
+  if (resultsPublic !== undefined) {
+    if (!isAdmin(req)) {
+      return res.status(403).json({ error: 'Only admins can change election results visibility.' });
+    }
+    updates.results_public = resultsPublic;
+  }
 
   const { data: currentElection, error: currentElectionError } = await supabase
     .from('elections')

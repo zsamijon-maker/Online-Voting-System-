@@ -27,13 +27,30 @@ function hasUsableJwtSecret() {
   );
 }
 
+function getTokenAlg(token) {
+  try {
+    const [headerB64] = String(token).split('.');
+    if (!headerB64) return null;
+    const normalized = headerB64.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+    const json = Buffer.from(padded, 'base64').toString('utf8');
+    const header = JSON.parse(json);
+    return typeof header?.alg === 'string' ? header.alg : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function verifySupabaseAccessToken(token) {
   if (!token) {
     return { valid: false, status: 401, reason: 'Missing access token.' };
   }
 
   try {
-    if (hasUsableJwtSecret()) {
+    const alg = getTokenAlg(token);
+    const shouldUseSharedSecret = hasUsableJwtSecret() && (!alg || alg.startsWith('HS'));
+
+    if (shouldUseSharedSecret) {
       const secret = new TextEncoder().encode(supabaseJwtSecret);
       const { payload } = await jwtVerify(token, secret, {
         algorithms: ['HS256'],

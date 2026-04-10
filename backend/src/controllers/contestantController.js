@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabaseClient.js';
 import { uploadEntityImage, deleteEntityImageByPublicUrl } from '../lib/storageUpload.js';
+import { logger } from '../lib/logger.js';
 
 const parseBoolean = (value, fallback = false) => {
   if (value === undefined || value === null || value === '') return fallback;
@@ -58,6 +59,29 @@ const hasContestantNumberConflict = async ({
   if (error) throw error;
 
   return (count ?? 0) > 0;
+};
+
+const isUndefinedColumnError = (error) => error?.code === '42703';
+
+const persistContestantUploadedPhoto = async (contestantId, publicUrl) => {
+  const withPhotoPath = await supabase
+    .from('contestants')
+    .update({ photo_path: publicUrl, photo_url: publicUrl })
+    .eq('id', contestantId)
+    .select()
+    .single();
+
+  if (!withPhotoPath.error) return withPhotoPath;
+
+  // Backward-compat fallback when photo_path column is not present yet.
+  if (!isUndefinedColumnError(withPhotoPath.error)) return withPhotoPath;
+
+  return supabase
+    .from('contestants')
+    .update({ photo_url: publicUrl })
+    .eq('id', contestantId)
+    .select()
+    .single();
 };
 
 // GET /api/pageants/:pageantId/contestants
@@ -143,22 +167,37 @@ export const createContestant = async (req, res) => {
   if (error) throw error;
 
   if (req.file) {
-    const uploaded = await uploadEntityImage({
-      folder: 'contestants',
-      recordId: data.id,
-      fileBuffer: req.file.buffer,
-      mimeType: req.file.mimetype,
-    });
+    let uploadedPublicUrl = null;
+    try {
+      const uploaded = await uploadEntityImage({
+        folder: 'contestants',
+        recordId: data.id,
+        fileBuffer: req.file.buffer,
+        mimeType: req.file.mimetype,
+      });
+      uploadedPublicUrl = uploaded.publicUrl;
 
-    const { data: withImage, error: updateError } = await supabase
-      .from('contestants')
-      .update({ photo_path: uploaded.publicUrl })
-      .eq('id', data.id)
-      .select()
-      .single();
+      const { data: withImage, error: updateError } = await persistContestantUploadedPhoto(data.id, uploaded.publicUrl);
+      if (updateError) throw updateError;
+      return res.status(201).json(withImage);
+    } catch (imageError) {
+      if (uploadedPublicUrl) {
+        try {
+          await deleteEntityImageByPublicUrl(uploadedPublicUrl);
+        } catch (deleteError) {
+          logger.warn('Failed to clean up contestant image after create error:', deleteError?.message || deleteError);
+        }
+      }
 
-    if (updateError) throw updateError;
-    return res.status(201).json(withImage);
+      try {
+        await supabase.from('contestants').delete().eq('id', data.id);
+      } catch (rollbackError) {
+        logger.warn('Failed to rollback contestant row after image error:', rollbackError?.message || rollbackError);
+      }
+
+      logger.error('Contestant create image upload failed:', imageError?.message || imageError);
+      return res.status(500).json({ error: 'Failed to upload contestant image. Please try again.' });
+    }
   }
 
   res.status(201).json(data);
@@ -241,28 +280,45 @@ export const updateContestant = async (req, res) => {
       });
 
       updates.photo_path = uploaded.publicUrl;
+      updates.photo_url = uploaded.publicUrl;
 
       if (existingContestant.photo_path && existingContestant.photo_path !== uploaded.publicUrl) {
         try {
           await deleteEntityImageByPublicUrl(existingContestant.photo_path);
         } catch (deleteErr) {
-          console.warn('Warning: Failed to delete old image:', deleteErr.message);
+          logger.warn('Warning: Failed to delete old image:', deleteErr.message);
           // Don't fail the entire update if deletion fails
         }
       }
     } catch (imageErr) {
-      console.error('Image upload error:', imageErr.message);
+      logger.error('Image upload error:', imageErr.message);
       throw new Error(`Failed to upload image: ${imageErr.message}`);
     }
   }
 
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from('contestants')
     .update(updates)
     .eq('id', req.params.id)
     .eq('pageant_id', req.params.pageantId)
     .select()
     .single();
+
+  if (error && isUndefinedColumnError(error) && Object.prototype.hasOwnProperty.call(updates, 'photo_path')) {
+    const fallbackUpdates = { ...updates };
+    delete fallbackUpdates.photo_path;
+
+    const retry = await supabase
+      .from('contestants')
+      .update(fallbackUpdates)
+      .eq('id', req.params.id)
+      .eq('pageant_id', req.params.pageantId)
+      .select()
+      .single();
+
+    data = retry.data;
+    error = retry.error;
+  }
 
   if (error?.code === '23505') {
     return res.status(409).json({ error: buildContestantNumberConflictMessage(pageant.scoring_method) });

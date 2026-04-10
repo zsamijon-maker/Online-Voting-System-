@@ -2,17 +2,6 @@ import { supabase } from '../lib/supabaseClient.js';
 import crypto from 'crypto';
 import { hasRole } from '../lib/roleUtils.js';
 
-const LEGACY_POSITION_LIMITS = Object.freeze({
-  President: 1,
-  'Vice President': 1,
-  Senators: 12,
-  Secretary: 1,
-  Treasurer: 1,
-  Auditor: 1,
-  PIO: 2,
-  'Board Members': 6,
-});
-
 // Only transition time-window states automatically; keep terminal states stable once set manually.
 const isAutoManagedElectionStatus = (status) => ['upcoming', 'active'].includes(status);
 
@@ -24,27 +13,13 @@ const computeTimedElectionStatus = (startDate, endDate, now = new Date()) => {
   return 'closed';
 };
 
-const resolvePositionVoteLimit = async ({ electionId, positionId, legacyPosition }) => {
-  if (positionId) {
-    const { data: positionRule, error } = await supabase
-      .from('election_positions')
-      .select('max_vote')
-      .eq('election_id', electionId)
-      .eq('id', positionId)
-      .maybeSingle();
-
-    if (error) throw error;
-    if (positionRule?.max_vote && positionRule.max_vote >= 1) return positionRule.max_vote;
-  }
-
-  // Legacy fallback for pre-migration records without position_id.
-  return LEGACY_POSITION_LIMITS[legacyPosition] ?? 1;
-};
-
 const generateVoteHash = (voterId, electionId, candidateId, position) => {
+  // Use cryptographic random bytes for entropy instead of predictable timestamp
+  const randomBytes = crypto.randomBytes(16).toString('hex');
+  const timestamp = Date.now().toString(36); // Use base-36 for less predictable format
   return crypto
     .createHash('sha256')
-    .update(`${voterId}:${electionId}:${candidateId}:${position}:${Date.now()}`)
+    .update(`${voterId}:${electionId}:${candidateId}:${position}:${timestamp}:${randomBytes}`)
     .digest('hex');
 };
 
@@ -93,65 +68,53 @@ export const submitVote = async (req, res) => {
   }
 
   const effectivePosition = candidate.position;
-  const positionKey = candidate.position_id ?? effectivePosition;
-
-  // Prevent duplicate vote for the same candidate.
-  const { data: duplicateCandidateVote, error: duplicateVoteError } = await supabase
-    .from('votes')
-    .select('id')
-    .eq('election_id', electionId)
-    .eq('voter_id', req.user.id)
-    .eq('candidate_id', candidateId)
-    .maybeSingle();
-
-  if (duplicateVoteError) throw duplicateVoteError;
-  if (duplicateCandidateVote) {
-    return res.status(409).json({ error: 'You have already voted for this candidate.' });
-  }
-
-  const maxVotesForPosition = await resolvePositionVoteLimit({
-    electionId,
-    positionId: candidate.position_id,
-    legacyPosition: effectivePosition,
-  });
-
-  const { data: existingVotes, error: countError } = await supabase
-    .from('votes')
-    .select('candidate_id, candidates(position_id, position)')
-    .eq('election_id', electionId)
-    .eq('voter_id', req.user.id);
-
-  if (countError) throw countError;
-
-  const votesForPositionCount = (existingVotes ?? []).filter((vote) => {
-    const votedPositionKey = vote.candidates?.position_id ?? vote.candidates?.position;
-    return votedPositionKey === positionKey;
-  }).length;
-
-  if (votesForPositionCount >= maxVotesForPosition) {
-    return res.status(409).json({
-      error: `Maximum votes reached for ${effectivePosition}. Limit: ${maxVotesForPosition}.`,
-    });
-  }
 
   const voteHash = generateVoteHash(req.user.id, electionId, candidateId, effectivePosition);
 
-  const { data, error } = await supabase
-    .from('votes')
-    .insert({
-      election_id: electionId,
-      voter_id: req.user.id,
-      candidate_id: candidateId,
-      position: effectivePosition,
-      vote_hash: voteHash,
-      ip_address: req.ip,
-      user_agent: req.headers['user-agent'],
-    })
-    .select()
-    .single();
+  // Atomic insert path handled by Postgres function to prevent check/insert races.
+  const { data: submitResult, error: submitError } = await supabase.rpc('submit_vote_atomic', {
+    p_election_id: electionId,
+    p_voter_id: req.user.id,
+    p_candidate_id: candidateId,
+    p_vote_hash: voteHash,
+    p_ip_address: req.ip,
+    p_user_agent: req.headers['user-agent'] ?? null,
+  });
 
-  if (error) throw error;
-  res.status(201).json({ message: 'Vote submitted successfully.', voteHash: data.vote_hash });
+  if (submitError) {
+    if (
+      submitError.code === 'PGRST202' ||
+      String(submitError.message || '').toLowerCase().includes('submit_vote_atomic')
+    ) {
+      return res.status(500).json({
+        error: 'Voting service is not fully configured. Please apply the latest database migration.',
+      });
+    }
+    throw submitError;
+  }
+
+  const resultRow = Array.isArray(submitResult) ? submitResult[0] : submitResult;
+  if (!resultRow?.success) {
+    if (resultRow?.error_code === 'DUPLICATE_CANDIDATE') {
+      return res.status(409).json({ error: resultRow.error_message || 'You have already voted for this candidate.' });
+    }
+
+    if (resultRow?.error_code === 'POSITION_LIMIT_REACHED') {
+      return res.status(409).json({ error: resultRow.error_message || `Maximum votes reached for ${effectivePosition}.` });
+    }
+
+    if (resultRow?.error_code === 'CANDIDATE_NOT_FOUND') {
+      return res.status(404).json({ error: resultRow.error_message || 'Candidate not found.' });
+    }
+
+    if (resultRow?.error_code === 'CANDIDATE_ELECTION_MISMATCH') {
+      return res.status(400).json({ error: resultRow.error_message || 'Candidate does not belong to this election.' });
+    }
+
+    return res.status(400).json({ error: resultRow?.error_message || 'Unable to submit vote.' });
+  }
+
+  res.status(201).json({ message: 'Vote submitted successfully.', voteHash: resultRow.vote_hash });
 };
 
 // GET /api/elections/:electionId/results

@@ -37,60 +37,29 @@ async function applyRLSFixes() {
     const sqlPath = join(__dirname, '../supabase/fix_all_rls_policies.sql');
     const sql = readFileSync(sqlPath, 'utf-8');
 
-    // Split by semicolons and filter out comments
-    const statements = sql
-      .split(';')
-      .map(s => s.trim())
-      .filter(s => s.length > 0 && !s.startsWith('--'));
+    console.log('\n📝 Applying SQL in a single fail-fast execution...\n');
 
-    console.log(`\n📝 Found ${statements.length} SQL statements to execute\n`);
+    const { error: rpcError } = await supabase.rpc('exec_sql', { sql_query: sql });
 
-    let successCount = 0;
-    let errorCount = 0;
+    if (rpcError) {
+      // Fallback to direct execution if RPC helper differs by project setup.
+      const response = await fetch(`${supabaseUrl}/rest/v1/rpc/exec`, {
+        method: 'POST',
+        headers: {
+          'apikey': supabaseKey,
+          'Authorization': `Bearer ${supabaseKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ query: sql })
+      });
 
-    for (let i = 0; i < statements.length; i++) {
-      const statement = statements[i];
-      
-      // Skip comment-only statements
-      if (statement.startsWith('--') || statement.length < 10) continue;
-
-      // Extract policy name for logging
-      const policyMatch = statement.match(/POLICY "([^"]+)"/);
-      const policyName = policyMatch ? policyMatch[1] : `Statement ${i + 1}`;
-
-      try {
-        console.log(`⏳ Applying: ${policyName}...`);
-        const { error } = await supabase.rpc('exec_sql', { sql_query: statement + ';' });
-        
-        if (error) {
-          // Try direct execution if RPC fails
-          const response = await fetch(`${supabaseUrl}/rest/v1/rpc/exec`, {
-            method: 'POST',
-            headers: {
-              'apikey': supabaseKey,
-              'Authorization': `Bearer ${supabaseKey}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ query: statement + ';' })
-          });
-
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-          }
-        }
-
-        console.log(`✅ Success: ${policyName}`);
-        successCount++;
-      } catch (error) {
-        console.log(`⚠️  Skipped: ${policyName} (${error.message})`);
-        errorCount++;
+      if (!response.ok) {
+        throw new Error(`SQL execution failed with HTTP ${response.status}`);
       }
     }
 
     console.log('\n' + '═'.repeat(60));
-    console.log(`✅ Successfully applied: ${successCount}`);
-    console.log(`⚠️  Skipped/Errors: ${errorCount}`);
-    console.log('\n💡 Note: Some errors are normal (e.g., dropping non-existent policies)');
+    console.log('✅ Successfully applied all RLS policy changes as one unit.');
     console.log('\n🎉 RLS policies have been configured!');
     console.log('📋 Your backend service role can now access all tables.');
     console.log('\n🔄 Try creating an election again in the browser!\n');

@@ -5,6 +5,10 @@ import { api, camelize } from '@/lib/api';
  * User Service  backed by Node.js + Supabase API
  */
 
+export type UserUpdatePayload = Partial<Pick<User, 'firstName' | 'lastName' | 'email' | 'studentId' | 'isActive'>> & {
+  password?: string;
+};
+
 export async function getAllUsers(): Promise<User[]> {
   const data = await api.get<unknown[]>('/api/users');
   return camelize<User[]>(data);
@@ -42,7 +46,7 @@ export async function createUser(userData: {
 
 export async function updateUser(
   id: string,
-  updates: Partial<User>
+  updates: UserUpdatePayload
 ): Promise<{ success: boolean; error?: string; user?: User }> {
   try {
     const data = await api.patch<unknown>(`/api/users/${id}`, updates);

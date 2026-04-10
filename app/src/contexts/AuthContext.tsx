@@ -13,6 +13,7 @@ interface LoginResult {
   success: boolean;
   requires2FA?: boolean;
   isFirstSetup?: boolean;
+  bypassed2FA?: boolean;
   challengeToken?: string;
   otpauthUrl?: string;
   secretKey?: string;
@@ -97,14 +98,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const data = await api.post<{
         requires2FA?: boolean;
         isFirstSetup?: boolean;
+        bypassed2FA?: boolean;
         challengeToken?: string;
         otpauthUrl?: string;
         secretKey?: string;
+        accessToken?: string;
+        refreshToken?: string;
+        user?: unknown;
       }>('/api/auth/login', credentials);
+
+      if (data.accessToken && data.refreshToken && data.user) {
+        await syncSupabaseSession(data.accessToken, data.refreshToken);
+        setToken(data.accessToken, data.refreshToken);
+        setUser(camelize<User>(data.user));
+      }
+
       return {
         success: true,
         requires2FA:  data.requires2FA,
         isFirstSetup: data.isFirstSetup,
+        bypassed2FA: data.bypassed2FA,
         challengeToken: data.challengeToken,
         otpauthUrl: data.otpauthUrl,
         secretKey:  data.secretKey,
@@ -112,7 +125,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       return { success: false, error: (error as Error).message || 'Login failed' };
     }
-  }, []);
+  }, [syncSupabaseSession]);
 
   // ── Login Step 2: verify TOTP code, receive full session ──────────────────
   const verifyLoginTotp = useCallback(

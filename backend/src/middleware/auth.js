@@ -1,4 +1,4 @@
-import { supabase } from '../lib/supabaseClient.js';
+import { supabase, supabaseAuth } from '../lib/supabaseClient.js';
 import { withRetry, isTransientNetworkError } from '../lib/networkUtils.js';
 import { verifySupabaseAccessToken } from '../lib/supabaseJwtVerifier.js';
 import { logger } from '../lib/logger.js';
@@ -28,7 +28,7 @@ export const authenticate = async (req, res, next) => {
       if (verification.status === 503 || verification.transient) {
         logger.warn('[authenticate] Local JWT verification unavailable, using Auth API fallback:', verification.error ?? verification.reason);
 
-        const { data, error } = await withRetry(() => supabase.auth.getUser(token));
+        const { data, error } = await withRetry(() => supabaseAuth.auth.getUser(token));
 
         if (error || !data?.user?.id) {
           return res.status(401).json({ error: 'Invalid or expired token.' });

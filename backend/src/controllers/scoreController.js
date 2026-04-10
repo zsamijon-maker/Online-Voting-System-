@@ -202,8 +202,8 @@ export const getPageantResults = async (req, res) => {
     });
   }
 
-  // If this pageant's results are not yet public, restrict to admins,
-  // pageant committee members, and assigned judges only.
+  // If this pageant's results are not yet public, restrict to admins and
+  // pageant committee members only.
   const { data: pageant, error: pageantError } = await supabase
     .from('pageants')
     .select('id, results_public, scoring_method')
@@ -214,7 +214,7 @@ export const getPageantResults = async (req, res) => {
     return res.status(404).json({ error: 'Pageant not found.' });
   }
 
-  if (!pageant.results_public && !hasRole(req, 'pageant_committee', 'judge')) {
+  if (!pageant.results_public && !hasRole(req, 'pageant_committee')) {
     return res.status(403).json({ error: 'Pageant results are not yet public.' });
   }
 

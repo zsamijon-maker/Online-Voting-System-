@@ -1,6 +1,29 @@
 import { supabase } from '../lib/supabaseClient.js';
 import { uploadEntityImage, deleteEntityImageByPublicUrl } from '../lib/storageUpload.js';
 
+const isUndefinedColumnError = (error) => error?.code === '42703';
+
+const persistCandidateUploadedPhoto = async (candidateId, publicUrl) => {
+  const withPhotoPath = await supabase
+    .from('candidates')
+    .update({ photo_path: publicUrl, photo_url: publicUrl })
+    .eq('id', candidateId)
+    .select('*, election_positions(id, position_name, max_vote)')
+    .single();
+
+  if (!withPhotoPath.error) return withPhotoPath;
+
+  // Backward-compat fallback when photo_path column is not present yet.
+  if (!isUndefinedColumnError(withPhotoPath.error)) return withPhotoPath;
+
+  return supabase
+    .from('candidates')
+    .update({ photo_url: publicUrl })
+    .eq('id', candidateId)
+    .select('*, election_positions(id, position_name, max_vote)')
+    .single();
+};
+
 const parseBoolean = (value, fallback = false) => {
   if (value === undefined || value === null || value === '') return fallback;
   if (typeof value === 'boolean') return value;
@@ -85,22 +108,36 @@ export const createCandidate = async (req, res) => {
   if (error) throw error;
 
   if (req.file) {
-    const uploaded = await uploadEntityImage({
-      folder: 'candidates',
-      recordId: data.id,
-      fileBuffer: req.file.buffer,
-      mimeType: req.file.mimetype,
-    });
+    let uploadedPublicUrl = null;
+    try {
+      const uploaded = await uploadEntityImage({
+        folder: 'candidates',
+        recordId: data.id,
+        fileBuffer: req.file.buffer,
+        mimeType: req.file.mimetype,
+      });
+      uploadedPublicUrl = uploaded.publicUrl;
 
-    const { data: withImage, error: updateError } = await supabase
-      .from('candidates')
-      .update({ photo_path: uploaded.publicUrl })
-      .eq('id', data.id)
-      .select('*, election_positions(id, position_name, max_vote)')
-      .single();
+      const { data: withImage, error: updateError } = await persistCandidateUploadedPhoto(data.id, uploaded.publicUrl);
+      if (updateError) throw updateError;
+      return res.status(201).json(normalizeCandidate(withImage));
+    } catch (imageError) {
+      if (uploadedPublicUrl) {
+        try {
+          await deleteEntityImageByPublicUrl(uploadedPublicUrl);
+        } catch {
+          // Best-effort cleanup only.
+        }
+      }
 
-    if (updateError) throw updateError;
-    return res.status(201).json(normalizeCandidate(withImage));
+      try {
+        await supabase.from('candidates').delete().eq('id', data.id);
+      } catch {
+        // Best-effort rollback only.
+      }
+
+      return res.status(500).json({ error: 'Failed to upload candidate image. Please try again.' });
+    }
   }
 
   res.status(201).json(normalizeCandidate(data));
@@ -155,18 +192,34 @@ export const updateCandidate = async (req, res) => {
     });
 
     updates.photo_path = uploaded.publicUrl;
+    updates.photo_url = uploaded.publicUrl;
 
     if (existing?.photo_path && existing.photo_path !== uploaded.publicUrl) {
       await deleteEntityImageByPublicUrl(existing.photo_path);
     }
   }
 
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from('candidates')
     .update(updates)
     .eq('id', req.params.id)
     .select('*, election_positions(id, position_name, max_vote)')
     .single();
+
+  if (error && isUndefinedColumnError(error) && Object.prototype.hasOwnProperty.call(updates, 'photo_path')) {
+    const fallbackUpdates = { ...updates };
+    delete fallbackUpdates.photo_path;
+
+    const retry = await supabase
+      .from('candidates')
+      .update(fallbackUpdates)
+      .eq('id', req.params.id)
+      .select('*, election_positions(id, position_name, max_vote)')
+      .single();
+
+    data = retry.data;
+    error = retry.error;
+  }
 
   if (error) throw error;
   res.json(normalizeCandidate(data));

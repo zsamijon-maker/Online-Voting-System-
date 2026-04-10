@@ -6,6 +6,7 @@
 
 import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
+import { randomBytes } from 'crypto';
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -22,45 +23,50 @@ const supabase = createClient(supabaseUrl, supabaseKey, {
   }
 });
 
+const configuredDefaultPassword = process.env.STAFF_DEFAULT_PASSWORD?.trim() || null;
+
+function generateStrongPassword(length = 20) {
+  return randomBytes(length).toString('base64url').slice(0, length);
+}
+
+function resolveInitialPassword() {
+  if (configuredDefaultPassword) return configuredDefaultPassword;
+  return generateStrongPassword();
+}
+
 const staffAccounts = [
   {
     email: 'admin@school.edu',
-    password: 'password',
     firstName: 'System',
     lastName: 'Administrator',
     roles: ['admin']
   },
   {
     email: 'election.committee@school.edu',
-    password: 'password',
     firstName: 'Election',
     lastName: 'Committee',
     roles: ['election_committee']
   },
   {
     email: 'pageant.committee@school.edu',
-    password: 'password',
     firstName: 'Pageant',
     lastName: 'Committee',
     roles: ['pageant_committee']
   },
   {
     email: 'judge1@school.edu',
-    password: 'password',
     firstName: 'Maria',
     lastName: 'Santos',
     roles: ['judge']
   },
   {
     email: 'judge2@school.edu',
-    password: 'password',
     firstName: 'John',
     lastName: 'Doe',
     roles: ['judge']
   },
   {
     email: 'judge3@school.edu',
-    password: 'password',
     firstName: 'Sarah',
     lastName: 'Lee',
     roles: ['judge']
@@ -70,11 +76,12 @@ const staffAccounts = [
 async function createStaffAccount(account) {
   try {
     console.log(`\n📝 Creating account for ${account.email}...`);
+    const initialPassword = resolveInitialPassword();
     
     // Create user in Supabase Auth
     const { data: authData, error: authError } = await supabase.auth.admin.createUser({
       email: account.email,
-      password: account.password,
+      password: initialPassword,
       email_confirm: true,
       user_metadata: {
         first_name: account.firstName,
@@ -106,6 +113,9 @@ async function createStaffAccount(account) {
       // Insert into users table
       await insertUserProfile(authData.user.id, account);
       console.log(`✅ Successfully created ${account.email}`);
+      if (!configuredDefaultPassword) {
+        console.log(`🔐 Generated temporary password for ${account.email}: ${initialPassword}`);
+      }
     }
   } catch (error) {
     console.error(`❌ Error creating ${account.email}:`, error.message);
@@ -141,8 +151,13 @@ async function main() {
 
   console.log('\n' + '═'.repeat(60));
   console.log('✨ Staff account creation complete!\n');
-  console.log('📋 Default password for all accounts: password');
-  console.log('⚠️  Please change these passwords in production!\n');
+  if (configuredDefaultPassword) {
+    console.log('📋 STAFF_DEFAULT_PASSWORD was used for created accounts.');
+    console.log('⚠️  Rotate these credentials immediately after first login.\n');
+  } else {
+    console.log('🔐 Unique strong temporary passwords were generated per new account.');
+    console.log('⚠️  Store printed passwords securely and rotate them after first login.\n');
+  }
 }
 
 main().catch(console.error);

@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { logger } from './lib/logger.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { cleanupExpiredChallenges } from './lib/challengeStore.js';
 
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/users.js';
@@ -80,7 +81,30 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
+// Stricter rate limiting for auth endpoints to prevent brute-force attacks
+// 5 login attempts per 15 minutes per IP
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts. Please try again in 15 minutes.' },
+  skipSuccessfulRequests: false, // Count all requests, not just failures
+});
+
+// 3 registration attempts per 15 minutes per IP
+const registerLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 3,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many registration attempts. Please try again in 15 minutes.' },
+});
+
 // Routes
+// Apply auth-specific rate limiters before the auth routes
+app.use('/api/auth/login', loginLimiter);
+app.use('/api/auth/register', registerLimiter);
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/elections', electionRoutes);
@@ -103,6 +127,15 @@ app.use(errorHandler);
 
 app.listen(PORT, () => {
   logger.info(`Server running on port ${PORT}`);
+
+  // Cleanup expired challenge tokens every 5 minutes
+  setInterval(async () => {
+    try {
+      await cleanupExpiredChallenges();
+    } catch (error) {
+      logger.error('Failed to cleanup expired challenges:', error);
+    }
+  }, 5 * 60 * 1000);
 });
 
 // Safety net: log unhandled promise rejections that somehow bypass asyncHandler.

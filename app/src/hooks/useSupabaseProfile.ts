@@ -18,15 +18,18 @@ function toSafeProfile(user: { id: string; email?: string | null; user_metadata?
   const metadata = user.user_metadata ?? {};
   const fullName = typeof metadata.full_name === 'string' ? metadata.full_name.trim() : '';
   const nameFallback = typeof metadata.name === 'string' ? metadata.name.trim() : '';
+  const firstName = typeof metadata.first_name === 'string' ? metadata.first_name.trim() : '';
+  const lastName = typeof metadata.last_name === 'string' ? metadata.last_name.trim() : '';
+  const composedName = `${firstName} ${lastName}`.trim();
   const avatarUrl = typeof metadata.avatar_url === 'string'
     ? metadata.avatar_url.trim()
     : (typeof metadata.picture === 'string' ? metadata.picture.trim() : '');
 
   return {
     id: user.id,
-    name: fullName || nameFallback || 'User',
+    name: fullName || nameFallback || composedName || 'User',
     email: user.email?.trim() || 'No email available',
-    avatarUrl: avatarUrl || DEFAULT_PROFILE_AVATAR,
+    avatarUrl,
   };
 }
 

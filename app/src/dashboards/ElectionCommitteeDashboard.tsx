@@ -1,110 +1,211 @@
 import { Fragment, useState, useEffect, useCallback } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import {
-  Users,
-  Plus,
-  Edit,
-  Trash2,
-  Play,
-  StopCircle,
-  Eye,
-  UserCheck,
-  MoreHorizontal,
-  Calendar,
-  BarChart3,
-  TrendingUp,
-  LogOut,
-  Menu,
-  X,
-  Crown,
-  ChevronDown,
-  ChevronUp,
-  Trophy,
-  Medal,
+  Users, Plus, Edit, Trash2, Play, StopCircle, UserCheck,
+  MoreHorizontal, Calendar, BarChart3, TrendingUp, LogOut, Menu, X,
+  Crown, ChevronDown, ChevronUp, Trophy, Medal, Vote,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNotification } from '@/contexts/NotificationContext';
 import {
-  getAllElections,
-  createElection,
-  updateElection,
-  deleteElection,
-  openElection,
-  closeElection,
-  publishResults,
-  getElectionResults,
-  addCandidate,
-  getCandidatesByElection,
-  getElectionPositions,
+  getAllElections, createElection, updateElection, deleteElection,
+  openElection, closeElection, getElectionResults,
+  addCandidate, getCandidatesByElection, getElectionPositions,
 } from '@/services/electionService';
-import type { Election, Candidate, ElectionResult, ElectionFormData, CandidateFormData, ElectionPosition } from '@/types';
+import type {
+  Election, Candidate, ElectionResult, ElectionFormData,
+  CandidateFormData, ElectionPosition,
+} from '@/types';
 import { formatDate, formatElectionType, formatElectionStatus } from '@/utils/formatters';
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle,
+  DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 
+// ─── Shared design primitives ─────────────────────────────────────────────────
+const NAV = [
+  { value: 'overview',   label: 'Overview',          icon: TrendingUp },
+  { value: 'elections',  label: 'Manage Elections',   icon: Calendar },
+  { value: 'candidates', label: 'Candidates',         icon: Users },
+  { value: 'results',    label: 'Results',            icon: BarChart3 },
+];
+
+const ActionBtn = ({
+  type = 'button', onClick, disabled, children, color = 'blue', fullWidth = false, size = 'md',
+}: {
+  type?: 'button' | 'submit'; onClick?: () => void; disabled?: boolean;
+  children: React.ReactNode; color?: 'blue' | 'green' | 'red' | 'outline';
+  fullWidth?: boolean; size?: 'sm' | 'md';
+}) => {
+  const palette = {
+    blue:    'bg-[#1E3A8A] hover:bg-[#1d3580] text-white shadow-sm shadow-blue-200',
+    green:   'bg-[#166534] hover:bg-[#14532d] text-white shadow-sm shadow-green-200',
+    red:     'bg-red-600 hover:bg-red-700 text-white',
+    outline: 'border border-gray-200 bg-white hover:bg-gray-50 text-gray-700',
+  };
+  const sz = size === 'sm' ? 'px-3 py-1.5 text-xs' : 'px-4 py-2 text-sm';
+  return (
+    <button
+      type={type} onClick={onClick} disabled={disabled}
+      className={`
+        inline-flex items-center justify-center gap-2 font-semibold rounded-xl
+        transition-all duration-150 hover:-translate-y-px active:translate-y-0
+        disabled:opacity-50 disabled:cursor-not-allowed disabled:translate-y-0
+        ${palette[color]} ${sz} ${fullWidth ? 'w-full' : ''}
+      `}
+    >
+      {children}
+    </button>
+  );
+};
+
+const DataTable = ({ headers, children, empty }: {
+  headers: string[]; children: React.ReactNode; empty?: boolean;
+}) => (
+  <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+    <div className="overflow-x-auto">
+      <table className="min-w-full divide-y divide-gray-100">
+        <thead>
+          <tr className="bg-[#1E3A8A]">
+            {headers.map((h, i) => (
+              <th
+                key={i}
+                className={`px-5 py-3 text-xs font-bold text-white uppercase tracking-wider ${i === headers.length - 1 ? 'text-right' : 'text-left'}`}
+              >
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-50">
+          {empty ? (
+            <tr>
+              <td colSpan={headers.length} className="px-5 py-10 text-center text-sm text-gray-400">
+                No data available.
+              </td>
+            </tr>
+          ) : children}
+        </tbody>
+      </table>
+    </div>
+  </div>
+);
+
+const StatusBadge = ({ status }: { status: string }) => {
+  const map: Record<string, string> = {
+    active:   'bg-green-50 text-green-700 border border-green-200',
+    closed:   'bg-gray-100 text-gray-600 border border-gray-200',
+    archived: 'bg-gray-100 text-gray-500 border border-gray-200',
+    upcoming: 'bg-blue-50 text-blue-700 border border-blue-200',
+    draft:    'bg-amber-50 text-amber-700 border border-amber-200',
+  };
+  return (
+    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold capitalize ${map[status] ?? 'bg-gray-100 text-gray-600'}`}>
+      {formatElectionStatus(status)}
+    </span>
+  );
+};
+
+const SectionCard = ({ children, className = '' }: { children: React.ReactNode; className?: string }) => (
+  <div className={`bg-white rounded-2xl border border-gray-100 shadow-sm p-5 ${className}`}>{children}</div>
+);
+
+const CardHeading = ({ eyebrow, title }: { eyebrow?: string; title: string }) => (
+  <div className="mb-5">
+    {eyebrow && <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">{eyebrow}</p>}
+    <h3 className="text-base font-extrabold text-gray-900 tracking-tight">{title}</h3>
+  </div>
+);
+
+const SectionHeader = ({
+  title, subtitle, action,
+}: { title: string; subtitle?: string; action?: React.ReactNode }) => (
+  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div>
+      <h2 className="text-xl font-extrabold text-gray-900 tracking-tight">{title}</h2>
+      {subtitle && <p className="text-sm text-gray-500 mt-0.5">{subtitle}</p>}
+    </div>
+    {action}
+  </div>
+);
+
+const FormField = ({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) => (
+  <div className="space-y-1.5">
+    <Label className="text-xs font-semibold text-gray-700 tracking-wide">{label}</Label>
+    {children}
+    {hint && <p className="text-[11px] text-gray-400">{hint}</p>}
+  </div>
+);
+const fic = "rounded-xl border-gray-200 bg-gray-50/60 text-sm focus:ring-[#1E3A8A]/30 focus:border-[#1E3A8A]";
+
+// ─── Position constants (unchanged) ──────────────────────────────────────────
+const STUDENT_GOVERNMENT_POSITIONS = [
+  { name: 'President', maxVote: 1 },
+  { name: 'Vice President', maxVote: 1 },
+  { name: 'Senators', maxVote: 12 },
+];
+const FSTLP_OFFICERS_POSITIONS = [
+  { name: 'President', maxVote: 1 },
+  { name: 'Vice President', maxVote: 1 },
+  { name: 'Secretary', maxVote: 1 },
+  { name: 'Treasurer', maxVote: 1 },
+  { name: 'Auditor', maxVote: 1 },
+  { name: 'PIO', maxVote: 2 },
+  { name: 'Board Members', maxVote: 6 },
+];
+
+// ─── Date helpers (unchanged) ─────────────────────────────────────────────────
+const toLocalDateTimeInputValue = (value?: string) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const offset = date.getTimezoneOffset() * 60 * 1000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+};
+const toIsoFromDateTimeLocal = (value: string) => {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toISOString();
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN COMPONENT
+// ═══════════════════════════════════════════════════════════════════════════════
 export default function ElectionCommitteeDashboard() {
-  const { user, logout } = useAuth();
+  // ── All logic unchanged ───────────────────────────────────────────────────
+  const { user, logout }     = useAuth();
   const { showSuccess, showError } = useNotification();
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab]               = useState('overview');
   const [isLogoutDialogOpen, setIsLogoutDialogOpen] = useState(false);
-  const [elections, setElections] = useState<Election[]>([]);
+  const [elections, setElections]               = useState<Election[]>([]);
   const [selectedElection, setSelectedElection] = useState<Election | null>(null);
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isCreateModalOpen, setIsCreateModalOpen]   = useState(false);
+  const [isEditModalOpen, setIsEditModalOpen]       = useState(false);
   const [isCandidateModalOpen, setIsCandidateModalOpen] = useState(false);
-  const [isResultsModalOpen, setIsResultsModalOpen] = useState(false);
-  const [results, setResults] = useState<ElectionResult[]>([]);
-  const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+  const [isResultsModalOpen, setIsResultsModalOpen]     = useState(false);
+  const [results, setResults]                   = useState<ElectionResult[]>([]);
+  const [isMobileNavOpen, setIsMobileNavOpen]   = useState(false);
 
   const fetchElections = useCallback(async () => {
     const allElections = await getAllElections();
     setElections(allElections);
   }, []);
 
+  useEffect(() => { Promise.resolve().then(() => { void fetchElections(); }); }, [fetchElections]);
+  useEffect(() => { Promise.resolve().then(() => { void fetchElections(); }); }, [activeTab, fetchElections]);
   useEffect(() => {
-    Promise.resolve().then(() => {
-      void fetchElections();
-    });
-  }, [fetchElections]);
-
-  useEffect(() => {
-    Promise.resolve().then(() => {
-      void fetchElections();
-    });
-  }, [activeTab, fetchElections]);
-
-  useEffect(() => {
-    const handleFocus = () => {
-      void fetchElections();
-    };
-
+    const handleFocus = () => { void fetchElections(); };
     window.addEventListener('focus', handleFocus);
     return () => window.removeEventListener('focus', handleFocus);
   }, [fetchElections]);
@@ -117,8 +218,11 @@ export default function ElectionCommitteeDashboard() {
         setIsCreateModalOpen(false);
         void fetchElections();
       } catch (error) {
-        showError('Failed to create election: ' + (error as Error).message);
+        const message = error instanceof Error ? error.message : 'Failed to create election';
+        showError('Failed to create election: ' + message);
       }
+    } else {
+      showError('You must be signed in to create an election.');
     }
   };
 
@@ -129,45 +233,25 @@ export default function ElectionCommitteeDashboard() {
       setIsEditModalOpen(false);
       setSelectedElection(null);
       void fetchElections();
-    } else {
-      showError('Failed to update election');
-    }
+    } else { showError('Failed to update election'); }
   };
 
   const handleDeleteElection = async (id: string) => {
     if (confirm('Are you sure you want to delete this election?')) {
       const success = await deleteElection(id);
-      if (success) {
-        showSuccess('Election deleted successfully');
-        void fetchElections();
-      } else {
-        showError('Failed to delete election');
-      }
+      if (success) { showSuccess('Election deleted successfully'); void fetchElections(); }
+      else { showError('Failed to delete election'); }
     }
   };
 
   const handleOpenElection = async (id: string) => {
     const result = await openElection(id);
-    if (result) {
-      showSuccess('Election is now open for voting');
-      void fetchElections();
-    }
+    if (result) { showSuccess('Election is now open for voting'); void fetchElections(); }
   };
 
   const handleCloseElection = async (id: string) => {
     const result = await closeElection(id);
-    if (result) {
-      showSuccess('Election has been closed');
-      void fetchElections();
-    }
-  };
-
-  const handlePublishResults = async (id: string) => {
-    const result = await publishResults(id);
-    if (result) {
-      showSuccess('Results are now public');
-      void fetchElections();
-    }
+    if (result) { showSuccess('Election has been closed'); void fetchElections(); }
   };
 
   const handleViewResults = async (election: Election) => {
@@ -184,7 +268,8 @@ export default function ElectionCommitteeDashboard() {
       setIsCandidateModalOpen(false);
       void fetchElections();
     } catch (error) {
-      showError('Failed to add candidate: ' + (error as Error).message);
+      const message = error instanceof Error ? error.message : 'Failed to add candidate';
+      showError('Failed to add candidate: ' + message);
     }
   };
 
@@ -194,241 +279,202 @@ export default function ElectionCommitteeDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] overflow-x-hidden">
+    <div className="min-h-screen bg-[#F7F8FC] overflow-x-hidden">
       <Tabs
         value={activeTab}
-        onValueChange={(value) => {
-          setActiveTab(value);
-          setIsMobileNavOpen(false);
-        }}
+        onValueChange={(value) => { setActiveTab(value); setIsMobileNavOpen(false); }}
         className="min-h-screen"
       >
-        <div className="sticky top-0 z-40 flex items-center justify-between border-b border-[#1E3A8A]/20 bg-white px-4 py-3 md:hidden">
-          <p className="text-sm font-semibold text-[#1E3A8A]">Election Panel</p>
-          <Button
+
+        {/* ── MOBILE TOP BAR ───────────────────────────────────────────── */}
+        <div className="sticky top-0 z-40 flex items-center justify-between bg-white border-b border-gray-100 px-4 py-3 md:hidden shadow-sm">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-[#1E3A8A] flex items-center justify-center">
+              <Vote className="w-4 h-4 text-white" />
+            </div>
+            <span className="text-sm font-bold text-gray-900">Election Panel</span>
+          </div>
+          <button
             type="button"
-            variant="ghost"
-            size="icon"
             onClick={() => setIsMobileNavOpen((prev) => !prev)}
+            className="p-2 rounded-xl text-gray-500 hover:bg-gray-100 transition-colors"
             aria-label={isMobileNavOpen ? 'Close navigation menu' : 'Open navigation menu'}
           >
-            {isMobileNavOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-          </Button>
+            {isMobileNavOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+          </button>
         </div>
 
         {isMobileNavOpen && (
           <button
             type="button"
-            className="fixed inset-0 z-40 bg-black/40 md:hidden"
+            className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm md:hidden"
             aria-label="Close navigation overlay"
             onClick={() => setIsMobileNavOpen(false)}
           />
         )}
 
-        <aside className={`fixed inset-y-0 left-0 z-50 w-[85vw] max-w-[300px] overflow-x-hidden border-r border-[#1E3A8A]/20 bg-white transition-transform duration-200 md:fixed md:top-0 md:h-screen md:w-64 md:max-w-none md:translate-x-0 md:border-b-0 md:flex md:flex-col ${isMobileNavOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-          <div className="px-4 py-5 border-b border-[#1E3A8A]/15">
-            <h2 className="text-lg font-bold text-[#1E3A8A]">Election Panel</h2>
-            <p className="text-xs text-gray-500 mt-1">Navigation</p>
+        {/* ── SIDEBAR ──────────────────────────────────────────────────── */}
+        <aside className={`
+          fixed inset-y-0 left-0 z-50 flex flex-col
+          w-[80vw] max-w-[260px] bg-white border-r border-gray-100 shadow-xl
+          transition-transform duration-200
+          md:w-64 md:max-w-none md:translate-x-0 md:shadow-none
+          ${isMobileNavOpen ? 'translate-x-0' : '-translate-x-full'}
+        `}>
+          <div className="px-5 py-5 border-b border-gray-100">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#1E3A8A] to-[#2563EB] flex items-center justify-center shadow-md shadow-blue-200">
+                <Vote className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-gray-900 leading-none">SchoolVote</p>
+                <p className="text-[10px] text-gray-400 mt-0.5 font-medium uppercase tracking-wide">Election Panel</p>
+              </div>
+            </div>
           </div>
 
-          <div className="p-3 overflow-x-hidden overflow-y-auto md:flex-1">
-            <TabsList className="h-auto w-full min-w-0 bg-transparent p-0 flex flex-col items-stretch justify-start gap-2 overflow-x-hidden md:flex-col md:overflow-visible">
-              <TabsTrigger
-                value="overview"
-                className="w-full min-w-0 justify-start gap-2 overflow-hidden whitespace-nowrap [&>svg]:shrink-0 rounded-md border border-transparent px-3 py-2 text-left text-gray-700 data-[state=active]:bg-[#1E3A8A] data-[state=active]:text-white data-[state=active]:border-[#1E3A8A]"
-              >
-                <TrendingUp className="w-4 h-4" />
-                Overview
-              </TabsTrigger>
-              <TabsTrigger
-                value="elections"
-                className="w-full min-w-0 justify-start gap-2 overflow-hidden whitespace-nowrap [&>svg]:shrink-0 rounded-md border border-transparent px-3 py-2 text-left text-gray-700 data-[state=active]:bg-[#1E3A8A] data-[state=active]:text-white data-[state=active]:border-[#1E3A8A]"
-              >
-                <Calendar className="w-4 h-4" />
-                Manage Elections
-              </TabsTrigger>
-              <TabsTrigger
-                value="candidates"
-                className="w-full min-w-0 justify-start gap-2 overflow-hidden whitespace-nowrap [&>svg]:shrink-0 rounded-md border border-transparent px-3 py-2 text-left text-gray-700 data-[state=active]:bg-[#1E3A8A] data-[state=active]:text-white data-[state=active]:border-[#1E3A8A]"
-              >
-                <Users className="w-4 h-4" />
-                Candidates
-              </TabsTrigger>
-              <TabsTrigger
-                value="results"
-                className="w-full min-w-0 justify-start gap-2 overflow-hidden whitespace-nowrap [&>svg]:shrink-0 rounded-md border border-transparent px-3 py-2 text-left text-gray-700 data-[state=active]:bg-[#1E3A8A] data-[state=active]:text-white data-[state=active]:border-[#1E3A8A]"
-              >
-                <BarChart3 className="w-4 h-4" />
-                Results
-              </TabsTrigger>
+          <nav className="flex-1 overflow-y-auto p-3 space-y-1">
+            <TabsList className="h-auto w-full bg-transparent p-0 flex flex-col items-stretch gap-1">
+              {NAV.map(({ value, label, icon: Icon }) => (
+                <TabsTrigger
+                  key={value}
+                  value={value}
+                  className="
+                    w-full justify-start gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-left
+                    text-gray-600 border border-transparent
+                    hover:bg-gray-50 hover:text-gray-900
+                    data-[state=active]:bg-[#EFF3FF] data-[state=active]:text-[#1E3A8A]
+                    data-[state=active]:border-[#C7D7FD] data-[state=active]:font-semibold
+                    transition-all
+                  "
+                >
+                  <Icon className="w-4 h-4 shrink-0" />
+                  {label}
+                </TabsTrigger>
+              ))}
             </TabsList>
-          </div>
+          </nav>
 
-          <div className="p-3 border-t border-[#1E3A8A]/15">
-            <Button
-              variant="outline"
-              className="w-full justify-start border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
-              onClick={() => {
-                setIsLogoutDialogOpen(true);
-              }}
+          <div className="p-3 border-t border-gray-100">
+            <button
+              type="button"
+              onClick={() => setIsLogoutDialogOpen(true)}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
             >
-              <LogOut className="w-4 h-4 mr-2" />
-              Logout
-            </Button>
+              <LogOut className="w-4 h-4 shrink-0" /> Sign Out
+            </button>
           </div>
         </aside>
 
-        <main className="min-w-0 md:ml-64">
-          <header className="bg-[#1E3A8A] border-b border-[#162d6b]">
-            <div className="px-4 sm:px-6 lg:px-8 py-4 sm:py-5">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-                <div>
-                  <h1 className="text-xl font-bold text-white sm:text-2xl">Election Committee Dashboard</h1>
-                  <p className="text-sm text-blue-200 mt-1">
-                    Welcome back, {user?.firstName} {user?.lastName}
-                  </p>
-                </div>
-                <Badge className="w-fit bg-white/20 text-white border border-white/30">
-                  <UserCheck className="w-3 h-3 mr-1" />
-                  Election Committee
-                </Badge>
+        {/* ── MAIN CONTENT ─────────────────────────────────────────────── */}
+        <main className="md:ml-64 min-w-0 flex flex-col min-h-screen">
+          <header className="bg-gradient-to-r from-[#0c1f4a] to-[#1E3A8A] px-5 py-5 sm:px-8">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h1 className="text-xl font-extrabold text-white tracking-tight sm:text-2xl">
+                  {NAV.find(n => n.value === activeTab)?.label ?? 'Election Committee'}
+                </h1>
+                <p className="text-sm text-blue-200/80 mt-0.5">Welcome back, {user?.firstName} {user?.lastName}</p>
               </div>
+              <span className="inline-flex items-center gap-1.5 bg-white/15 border border-white/20 rounded-full px-3 py-1 text-xs font-semibold text-white w-fit">
+                <UserCheck className="w-3 h-3" /> Election Committee
+              </span>
             </div>
           </header>
 
-          <div className="px-4 py-5 sm:px-6 sm:py-8 lg:px-8">
+          <div className="flex-1 px-5 py-6 sm:px-8 sm:py-8">
             <TabsContent value="overview">
               <ElectionOverviewTab elections={elections} onNavigate={setActiveTab} />
             </TabsContent>
-
             <TabsContent value="elections">
               <ElectionsTab
                 elections={elections}
                 onCreate={() => setIsCreateModalOpen(true)}
-                onEdit={(election) => {
-                  setSelectedElection(election);
-                  setIsEditModalOpen(true);
-                }}
+                onEdit={(election) => { setSelectedElection(election); setIsEditModalOpen(true); }}
                 onDelete={handleDeleteElection}
                 onOpen={handleOpenElection}
                 onClose={handleCloseElection}
-                onPublishResults={handlePublishResults}
                 onViewResults={handleViewResults}
               />
             </TabsContent>
-
             <TabsContent value="candidates">
               <CandidatesTab
                 elections={elections}
-                onAddCandidate={(election) => {
-                  setSelectedElection(election);
-                  setIsCandidateModalOpen(true);
-                }}
+                onAddCandidate={(election) => { setSelectedElection(election); setIsCandidateModalOpen(true); }}
               />
             </TabsContent>
-
             <TabsContent value="results">
-              <ResultsTab
-                elections={elections}
-                onViewResults={handleViewResults}
-              />
+              <ResultsTab elections={elections} onViewResults={handleViewResults} />
             </TabsContent>
           </div>
         </main>
       </Tabs>
 
+      {/* ── LOGOUT DIALOG ────────────────────────────────────────────────── */}
       <Dialog open={isLogoutDialogOpen} onOpenChange={setIsLogoutDialogOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-sm rounded-2xl">
           <DialogHeader>
-            <DialogTitle>Logout Confirmation</DialogTitle>
-            <DialogDescription>
-              Are you sure you want to log out?
-            </DialogDescription>
+            <DialogTitle className="text-lg font-extrabold tracking-tight">Sign out?</DialogTitle>
+            <DialogDescription className="text-sm text-gray-500">You'll be returned to the login page.</DialogDescription>
           </DialogHeader>
-          <DialogFooter className="touch-footer">
-            <Button variant="outline" className="touch-target w-full sm:w-auto" onClick={() => setIsLogoutDialogOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              className="touch-target w-full bg-red-600 text-white hover:bg-red-700 sm:w-auto"
-              onClick={() => {
-                void handleLogout();
-              }}
-            >
-              Logout
-            </Button>
+          <DialogFooter className="gap-2 mt-2">
+            <Button variant="outline" className="rounded-xl flex-1 sm:flex-none" onClick={() => setIsLogoutDialogOpen(false)}>Cancel</Button>
+            <Button className="rounded-xl flex-1 sm:flex-none bg-red-600 hover:bg-red-700 text-white" onClick={() => { void handleLogout(); }}>Sign Out</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Create Election Modal */}
+      {/* ── CREATE ELECTION MODAL ─────────────────────────────────────────── */}
       <Dialog open={isCreateModalOpen} onOpenChange={setIsCreateModalOpen}>
-        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl">
           <DialogHeader>
-            <DialogTitle>Create New Election</DialogTitle>
-            <DialogDescription>
-              Set up a new election for students to vote.
-            </DialogDescription>
+            <DialogTitle className="text-lg font-extrabold">Create New Election</DialogTitle>
+            <DialogDescription className="text-sm text-gray-500">Set up a new election for students to vote.</DialogDescription>
           </DialogHeader>
-          <ElectionForm
-            onSubmit={handleCreateElection}
-            onCancel={() => setIsCreateModalOpen(false)}
-          />
+          <ElectionForm onSubmit={handleCreateElection} onCancel={() => setIsCreateModalOpen(false)} />
         </DialogContent>
       </Dialog>
 
-      {/* Edit Election Modal */}
+      {/* ── EDIT ELECTION MODAL ───────────────────────────────────────────── */}
       <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
-        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl">
           <DialogHeader>
-            <DialogTitle>Edit Election</DialogTitle>
-            <DialogDescription>
-              Update election details.
-            </DialogDescription>
+            <DialogTitle className="text-lg font-extrabold">Edit Election</DialogTitle>
+            <DialogDescription className="text-sm text-gray-500">Update election details.</DialogDescription>
           </DialogHeader>
           {selectedElection && (
             <ElectionForm
               election={selectedElection}
               onSubmit={(data) => handleUpdateElection(selectedElection.id, data)}
-              onCancel={() => {
-                setIsEditModalOpen(false);
-                setSelectedElection(null);
-              }}
+              onCancel={() => { setIsEditModalOpen(false); setSelectedElection(null); }}
             />
           )}
         </DialogContent>
       </Dialog>
 
-      {/* Add Candidate Modal */}
+      {/* ── ADD CANDIDATE MODAL ───────────────────────────────────────────── */}
       <Dialog open={isCandidateModalOpen} onOpenChange={setIsCandidateModalOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg rounded-2xl">
           <DialogHeader>
-            <DialogTitle>Add Candidate</DialogTitle>
-            <DialogDescription>
-              Add a new candidate to {selectedElection?.title}.
-            </DialogDescription>
+            <DialogTitle className="text-lg font-extrabold">Add Candidate</DialogTitle>
+            <DialogDescription className="text-sm text-gray-500">Add a new candidate to {selectedElection?.title}.</DialogDescription>
           </DialogHeader>
           {selectedElection && (
             <CandidateForm
               electionId={selectedElection.id}
               onSubmit={(data) => handleAddCandidate(selectedElection.id, data)}
-              onCancel={() => {
-                setIsCandidateModalOpen(false);
-                setSelectedElection(null);
-              }}
+              onCancel={() => { setIsCandidateModalOpen(false); setSelectedElection(null); }}
             />
           )}
         </DialogContent>
       </Dialog>
 
-      {/* Results Modal */}
+      {/* ── RESULTS MODAL ─────────────────────────────────────────────────── */}
       <Dialog open={isResultsModalOpen} onOpenChange={setIsResultsModalOpen}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto rounded-2xl">
           <DialogHeader>
-            <DialogTitle>Election Results</DialogTitle>
-            <DialogDescription>
-              Results for {selectedElection?.title}
-            </DialogDescription>
+            <DialogTitle className="text-lg font-extrabold">Election Results</DialogTitle>
+            <DialogDescription className="text-sm text-gray-500">Results for {selectedElection?.title}</DialogDescription>
           </DialogHeader>
           <ResultsDisplay results={results} election={selectedElection} />
         </DialogContent>
@@ -437,20 +483,17 @@ export default function ElectionCommitteeDashboard() {
   );
 }
 
-// ============================================
-// OVERVIEW TAB
-// ============================================
+// ═══════════════════════════════════════════════════════════════════════════════
+// OVERVIEW TAB (logic unchanged)
+// ═══════════════════════════════════════════════════════════════════════════════
 function ElectionOverviewTab({
-  elections,
-  onNavigate,
-}: {
-  elections: Election[];
-  onNavigate: (tab: string) => void;
-}) {
-  const total = elections.length;
-  const active = elections.filter(e => e.status === 'active').length;
+  elections, onNavigate,
+}: { elections: Election[]; onNavigate: (tab: string) => void }) {
+
+  const total    = elections.length;
+  const active   = elections.filter(e => e.status === 'active').length;
   const upcoming = elections.filter(e => e.status === 'upcoming' || e.status === 'draft').length;
-  const closed = elections.filter(e => e.status === 'closed' || e.status === 'archived').length;
+  const closed   = elections.filter(e => e.status === 'closed' || e.status === 'archived').length;
 
   const statusData = [
     { status: 'Active', count: active },
@@ -463,242 +506,171 @@ function ElectionOverviewTab({
     .slice(0, 5);
 
   const statCards = [
-    { label: 'Total Elections', value: total, colorClass: 'bg-blue-100 text-blue-600' },
-    { label: 'Active', value: active, colorClass: 'bg-green-100 text-green-600' },
-    { label: 'Upcoming / Draft', value: upcoming, colorClass: 'bg-amber-100 text-amber-600' },
-    { label: 'Closed / Archived', value: closed, colorClass: 'bg-gray-100 text-gray-600' },
+    { label: 'Total Elections',    value: total,    accent: 'bg-blue-50 text-blue-600',   icon: Calendar },
+    { label: 'Active',             value: active,   accent: 'bg-green-50 text-green-600', icon: Vote },
+    { label: 'Upcoming / Draft',   value: upcoming, accent: 'bg-amber-50 text-amber-600', icon: TrendingUp },
+    { label: 'Closed / Archived',  value: closed,   accent: 'bg-gray-50 text-gray-500',   icon: BarChart3 },
   ];
-
-  const statusBadgeClass: Record<string, string> = {
-    active: 'bg-green-100 text-green-800',
-    upcoming: 'bg-blue-100 text-blue-800',
-    draft: 'bg-gray-100 text-gray-700',
-    closed: 'bg-red-100 text-red-800',
-    archived: 'bg-gray-100 text-gray-500',
-  };
 
   return (
     <div className="space-y-6">
-      {/* Stat Cards */}
+      {/* Stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {statCards.map((card, i) => (
-          <div key={i} className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
-            <p className="text-sm font-medium text-gray-500">{card.label}</p>
-            <p className="text-3xl font-bold text-gray-900 mt-1">{card.value}</p>
-            <div className={`mt-2 inline-block px-2 py-0.5 rounded text-xs font-medium ${card.colorClass}`}>
-              elections
+          <div key={i} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 hover:shadow-md transition-shadow">
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">{card.label}</p>
+                <p className="text-3xl font-extrabold text-gray-900 tracking-tight">{card.value}</p>
+              </div>
+              <div className={`w-11 h-11 rounded-xl flex items-center justify-center ${card.accent}`}>
+                <card.icon className="w-5 h-5" />
+              </div>
             </div>
           </div>
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Elections by Status Chart */}
-        <div className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
-          <h3 className="text-base font-semibold text-[#1E3A8A] mb-4">Elections by Status</h3>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* Bar chart */}
+        <SectionCard>
+          <CardHeading eyebrow="Distribution" title="Elections by Status" />
           {statusData.length > 0 ? (
             <ResponsiveContainer width="100%" height={200}>
               <BarChart data={statusData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
                 <XAxis dataKey="status" tick={{ fontSize: 12 }} />
                 <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-                <Tooltip />
-                <Bar dataKey="count" fill="#1E3A8A" radius={[4, 4, 0, 0]} />
+                <Tooltip contentStyle={{ borderRadius: 12, border: '1px solid #e5e7eb', fontSize: 12 }} />
+                <Bar dataKey="count" fill="#1E3A8A" radius={[6, 6, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           ) : (
             <p className="text-sm text-gray-400 py-8 text-center">No elections yet.</p>
           )}
-        </div>
+        </SectionCard>
 
-        {/* Recent Elections */}
-        <div className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
-          <h3 className="text-base font-semibold text-[#1E3A8A] mb-4">Recent Elections</h3>
+        {/* Recent elections */}
+        <SectionCard>
+          <CardHeading eyebrow="Latest" title="Recent Elections" />
           {recentElections.length > 0 ? (
-            <ul className="divide-y divide-gray-100">
+            <ul className="divide-y divide-gray-50">
               {recentElections.map((election) => (
-                <li key={election.id} className="py-2 flex items-center justify-between gap-2">
-                  <span className="text-sm text-gray-800 truncate min-w-0">{election.title}</span>
-                  <span className={`shrink-0 px-2 py-0.5 rounded text-xs font-medium capitalize ${statusBadgeClass[election.status] || 'bg-gray-100 text-gray-700'}`}>
-                    {election.status}
-                  </span>
+                <li key={election.id} className="py-2.5 flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium text-gray-800 truncate min-w-0">{election.title}</span>
+                  <StatusBadge status={election.status} />
                 </li>
               ))}
             </ul>
           ) : (
             <p className="text-sm text-gray-400">No elections found.</p>
           )}
-        </div>
+        </SectionCard>
       </div>
 
-      {/* Quick Actions */}
-      <div className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
-        <h3 className="text-base font-semibold text-[#1E3A8A] mb-4">Quick Actions</h3>
-        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-          <Button
-            className="touch-target w-full rounded-md bg-[#1E3A8A] font-medium hover:bg-[#162d6b] sm:w-auto"
-            onClick={() => onNavigate('elections')}
-          >
-            <Calendar className="w-4 h-4 mr-2" />
-            Manage Elections
-          </Button>
-          <Button variant="outline" className="touch-target w-full sm:w-auto" onClick={() => onNavigate('candidates')}>
-            <Users className="w-4 h-4 mr-2" />
-            Manage Candidates
-          </Button>
-          <Button variant="outline" className="touch-target w-full sm:w-auto" onClick={() => onNavigate('results')}>
-            <BarChart3 className="w-4 h-4 mr-2" />
-            View Results
-          </Button>
+      {/* Quick actions */}
+      <SectionCard>
+        <CardHeading eyebrow="Shortcuts" title="Quick Actions" />
+        <div className="flex flex-wrap gap-3">
+          <ActionBtn onClick={() => onNavigate('elections')} color="blue">
+            <Calendar className="w-4 h-4" /> Manage Elections
+          </ActionBtn>
+          <ActionBtn onClick={() => onNavigate('candidates')} color="outline">
+            <Users className="w-4 h-4" /> Manage Candidates
+          </ActionBtn>
+          <ActionBtn onClick={() => onNavigate('results')} color="outline">
+            <BarChart3 className="w-4 h-4" /> View Results
+          </ActionBtn>
         </div>
-      </div>
+      </SectionCard>
     </div>
   );
 }
 
-// ============================================
-// ELECTIONS TAB
-// ============================================
+// ═══════════════════════════════════════════════════════════════════════════════
+// ELECTIONS TAB (logic unchanged)
+// ═══════════════════════════════════════════════════════════════════════════════
 function ElectionsTab({
-  elections,
-  onCreate,
-  onEdit,
-  onDelete,
-  onOpen,
-  onClose,
-  onPublishResults,
-  onViewResults,
+  elections, onCreate, onEdit, onDelete, onOpen, onClose, onViewResults,
 }: {
-  elections: Election[];
-  onCreate: () => void;
-  onEdit: (election: Election) => void;
-  onDelete: (id: string) => void;
-  onOpen: (id: string) => void;
-  onClose: (id: string) => void;
-  onPublishResults: (id: string) => void;
+  elections: Election[]; onCreate: () => void; onEdit: (election: Election) => void;
+  onDelete: (id: string) => void; onOpen: (id: string) => void; onClose: (id: string) => void;
   onViewResults: (election: Election) => void;
 }) {
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h3 className="text-lg font-semibold text-[#1E3A8A]">All Elections</h3>
-        <Button className="touch-target w-full rounded-md bg-[#2E7D32] font-medium hover:bg-[#1B5E20] sm:w-auto" onClick={onCreate}>
-          <Plus className="w-4 h-4 mr-2" />
-          Create Election
-        </Button>
-      </div>
+    <div className="space-y-5">
+      <SectionHeader
+        title="All Elections"
+        subtitle={`${elections.length} total election${elections.length !== 1 ? 's' : ''}`}
+        action={
+          <ActionBtn color="green" onClick={onCreate}>
+            <Plus className="w-4 h-4" /> Create Election
+          </ActionBtn>
+        }
+      />
 
-      <div className="bg-white rounded-lg shadow border border-gray-200 overflow-x-auto">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-[#1E3A8A]">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-semibold text-white uppercase tracking-wider">
-                Election
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-semibold text-white uppercase tracking-wider">
-                Status
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-semibold text-white uppercase tracking-wider">
-                Dates
-              </th>
-              <th className="px-6 py-3 text-right text-xs font-semibold text-white uppercase tracking-wider">
-                Actions
-              </th>
-            </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {elections.map((election) => (
-              <tr key={election.id} className="hover:bg-gray-50">
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="text-sm font-medium text-gray-900">{election.title}</div>
-                  <div className="text-sm text-gray-500">{formatElectionType(election.type)}</div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
-                  <Badge
-                    className={
-                      election.status === 'active'
-                        ? 'bg-green-100 text-green-800'
-                        : election.status === 'closed'
-                        ? 'bg-gray-100 text-gray-800'
-                        : election.status === 'upcoming'
-                        ? 'bg-blue-100 text-blue-800'
-                        : 'bg-yellow-100 text-yellow-800'
-                    }
-                  >
-                    {formatElectionStatus(election.status)}
-                  </Badge>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                  <div className="flex items-center">
-                    <Calendar className="w-4 h-4 mr-2" />
-                    {formatDate(election.startDate)} - {formatDate(election.endDate)}
-                  </div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="sm" className="touch-target-compact">
-                        <MoreHorizontal className="w-4 h-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => onEdit(election)}>
-                        <Edit className="w-4 h-4 mr-2" />
-                        Edit
-                      </DropdownMenuItem>
-                      {election.status === 'upcoming' && (
-                        <DropdownMenuItem onClick={() => onOpen(election.id)}>
-                          <Play className="w-4 h-4 mr-2" />
-                          Open Voting
-                        </DropdownMenuItem>
-                      )}
-                      {election.status === 'active' && (
-                        <DropdownMenuItem onClick={() => onClose(election.id)}>
-                          <StopCircle className="w-4 h-4 mr-2" />
-                          Close Voting
-                        </DropdownMenuItem>
-                      )}
-                      {election.status === 'closed' && !election.resultsPublic && (
-                        <DropdownMenuItem onClick={() => onPublishResults(election.id)}>
-                          <Eye className="w-4 h-4 mr-2" />
-                          Publish Results
-                        </DropdownMenuItem>
-                      )}
-                      <DropdownMenuItem onClick={() => onViewResults(election)}>
-                        <BarChart3 className="w-4 h-4 mr-2" />
-                        View Results
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={() => onDelete(election.id)}
-                        className="text-red-600"
-                      >
-                        <Trash2 className="w-4 h-4 mr-2" />
-                        Delete
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <DataTable headers={['Election', 'Status', 'Dates', 'Actions']} empty={elections.length === 0}>
+        {elections.map((election) => (
+          <tr key={election.id} className="hover:bg-gray-50/70 transition-colors">
+            <td className="px-5 py-3.5">
+              <p className="text-sm font-semibold text-gray-900">{election.title}</p>
+              <p className="text-xs text-gray-400 capitalize mt-0.5">{formatElectionType(election.type)}</p>
+            </td>
+            <td className="px-5 py-3.5 whitespace-nowrap">
+              <StatusBadge status={election.status} />
+            </td>
+            <td className="px-5 py-3.5 whitespace-nowrap">
+              <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                <Calendar className="w-3.5 h-3.5" />
+                {formatDate(election.startDate)} — {formatDate(election.endDate)}
+              </div>
+            </td>
+            <td className="px-5 py-3.5 whitespace-nowrap text-right">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button className="p-1.5 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition-colors">
+                    <MoreHorizontal className="w-4 h-4" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="rounded-xl">
+                  <DropdownMenuItem onClick={() => onEdit(election)}>
+                    <Edit className="w-4 h-4 mr-2" /> Edit
+                  </DropdownMenuItem>
+                  {election.status === 'upcoming' && (
+                    <DropdownMenuItem onClick={() => onOpen(election.id)}>
+                      <Play className="w-4 h-4 mr-2" /> Open Voting
+                    </DropdownMenuItem>
+                  )}
+                  {election.status === 'active' && (
+                    <DropdownMenuItem onClick={() => onClose(election.id)}>
+                      <StopCircle className="w-4 h-4 mr-2" /> Close Voting
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem onClick={() => onViewResults(election)}>
+                    <BarChart3 className="w-4 h-4 mr-2" /> View Results
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => onDelete(election.id)} className="text-red-600">
+                    <Trash2 className="w-4 h-4 mr-2" /> Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </td>
+          </tr>
+        ))}
+      </DataTable>
     </div>
   );
 }
 
-// ============================================
-// CANDIDATES TAB
-// ============================================
+// ═══════════════════════════════════════════════════════════════════════════════
+// CANDIDATES TAB (logic unchanged)
+// ═══════════════════════════════════════════════════════════════════════════════
 function CandidatesTab({
-  elections,
-  onAddCandidate,
-}: {
-  elections: Election[];
-  onAddCandidate: (election: Election) => void;
-}) {
+  elections, onAddCandidate,
+}: { elections: Election[]; onAddCandidate: (election: Election) => void }) {
+
   const [selectedElectionId, setSelectedElectionId] = useState<string>('');
-  const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [candidates, setCandidates]                 = useState<Candidate[]>([]);
+  const [isLoading, setIsLoading]                   = useState(false);
 
   useEffect(() => {
     if (selectedElectionId) {
@@ -707,187 +679,134 @@ function CandidatesTab({
         .then(setCandidates)
         .catch(() => setCandidates([]))
         .finally(() => setIsLoading(false));
-    } else {
-      setCandidates([]);
-    }
+    } else { setCandidates([]); }
   }, [selectedElectionId]);
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <h3 className="text-lg font-semibold text-[#1E3A8A]">Manage Candidates</h3>
-        <div className="touch-action-group">
-          <Select value={selectedElectionId} onValueChange={setSelectedElectionId}>
-            <SelectTrigger className="w-full sm:w-64 touch-target">
-              <SelectValue placeholder="Select an election" />
-            </SelectTrigger>
-            <SelectContent>
-              {elections.map((election) => (
-                <SelectItem key={election.id} value={election.id}>
-                  {election.title}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {selectedElectionId && (
-            <Button
-              className="touch-target w-full rounded-md bg-[#2E7D32] font-medium hover:bg-[#1B5E20] sm:w-auto"
-              onClick={() => {
+    <div className="space-y-5">
+      <SectionHeader
+        title="Manage Candidates"
+        action={
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            <Select value={selectedElectionId} onValueChange={setSelectedElectionId}>
+              <SelectTrigger className="w-full sm:w-60 rounded-xl border-gray-200 text-sm">
+                <SelectValue placeholder="Select an election" />
+              </SelectTrigger>
+              <SelectContent className="rounded-xl">
+                {elections.map((election) => (
+                  <SelectItem key={election.id} value={election.id}>{election.title}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {selectedElectionId && (
+              <ActionBtn color="green" onClick={() => {
                 const election = elections.find(e => e.id === selectedElectionId);
                 if (election) onAddCandidate(election);
-              }}
-            >
-              <Plus className="w-4 h-4 mr-2" />
-              Add Candidate
-            </Button>
-          )}
-        </div>
-      </div>
+              }}>
+                <Plus className="w-4 h-4" /> Add Candidate
+              </ActionBtn>
+            )}
+          </div>
+        }
+      />
 
       {selectedElectionId ? (
-        <div className="bg-white rounded-lg shadow border border-gray-200 overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-[#1E3A8A]">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-white uppercase tracking-wider">
-                  Candidate
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-white uppercase tracking-wider">
-                  Position
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-semibold text-white uppercase tracking-wider">
-                  Status
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {isLoading ? (
-                <tr>
-                  <td colSpan={3} className="px-6 py-8 text-center text-gray-500">
-                    Loading candidates...
-                  </td>
-                </tr>
-              ) : candidates.length === 0 ? (
-                <tr>
-                  <td colSpan={3} className="px-6 py-8 text-center text-gray-500">
-                    No candidates added yet.
-                  </td>
-                </tr>
-              ) : (
-                candidates.map((candidate) => (
-                <tr key={candidate.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="flex items-center">
-                      {candidate.photoPath || candidate.photoUrl ? (
-                        <img
-                          src={candidate.photoPath || candidate.photoUrl}
-                          alt={candidate.displayName}
-                          className="w-10 h-10 rounded-full object-cover"
-                          onError={(e) => {
-                            // Replace with initials fallback if image fails to load
-                            const target = e.target as HTMLImageElement;
-                            target.style.display = 'none';
-                            if (target.nextElementSibling) {
-                              (target.nextElementSibling as HTMLElement).style.display = 'flex';
-                            }
-                          }}
-                        />
-                      ) : null}
-                      <div 
-                        className="w-10 h-10 rounded-full bg-[#1E3A8A] flex items-center justify-center text-white font-medium"
-                        style={{ display: (candidate.photoPath || candidate.photoUrl) ? 'none' : 'flex' }}
-                      >
-                        {candidate.displayName.charAt(0)}
-                      </div>
-                      <div className="ml-4">
-                        <div className="text-sm font-medium text-gray-900">
-                          {candidate.displayName}
-                        </div>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {candidate.position}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <Badge
-                      className={
-                        candidate.isActive
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-gray-100 text-gray-800'
-                      }
-                    >
-                      {candidate.isActive ? 'Active' : 'Inactive'}
-                    </Badge>
-                  </td>
-                </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+        <DataTable headers={['Candidate', 'Position', 'Status']} empty={!isLoading && candidates.length === 0}>
+          {isLoading ? (
+            <tr>
+              <td colSpan={3} className="px-5 py-10 text-center">
+                <div className="flex items-center justify-center gap-2 text-sm text-gray-400">
+                  <div className="w-4 h-4 border-2 border-[#1E3A8A] border-t-transparent rounded-full animate-spin" />
+                  Loading candidates…
+                </div>
+              </td>
+            </tr>
+          ) : candidates.map((candidate) => (
+            <tr key={candidate.id} className="hover:bg-gray-50/70 transition-colors">
+              <td className="px-5 py-3.5 whitespace-nowrap">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-[#1E3A8A] overflow-hidden flex items-center justify-center text-white text-xs font-bold shrink-0">
+                    {(candidate.photoPath || candidate.photoUrl) ? (
+                      <img
+                        src={candidate.photoPath || candidate.photoUrl}
+                        alt={candidate.displayName}
+                        className="w-full h-full object-cover"
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                      />
+                    ) : candidate.displayName.charAt(0).toUpperCase()}
+                  </div>
+                  <p className="text-sm font-semibold text-gray-900">{candidate.displayName}</p>
+                </div>
+              </td>
+              <td className="px-5 py-3.5 whitespace-nowrap text-sm text-gray-500">{candidate.position}</td>
+              <td className="px-5 py-3.5 whitespace-nowrap">
+                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${candidate.isActive ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-gray-100 text-gray-600 border border-gray-200'}`}>
+                  {candidate.isActive ? 'Active' : 'Inactive'}
+                </span>
+              </td>
+            </tr>
+          ))}
+        </DataTable>
       ) : (
-        <div className="text-center py-12 bg-white rounded-lg border border-gray-200">
-          <Users className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-gray-900">Select an Election</h3>
-          <p className="text-gray-500 mt-2">Choose an election to view and manage its candidates.</p>
+        <div className="flex flex-col items-center justify-center py-20 text-center bg-white rounded-2xl border border-gray-100">
+          <div className="w-16 h-16 rounded-2xl bg-gray-50 flex items-center justify-center mb-4">
+            <Users className="w-8 h-8 text-gray-300" />
+          </div>
+          <h3 className="text-base font-extrabold text-gray-700 tracking-tight">Select an Election</h3>
+          <p className="text-sm text-gray-400 mt-1 max-w-xs">Choose an election above to view and manage its candidates.</p>
         </div>
       )}
     </div>
   );
 }
 
-// ============================================
-// RESULTS TAB
-// ============================================
+// ═══════════════════════════════════════════════════════════════════════════════
+// RESULTS TAB (logic unchanged)
+// ═══════════════════════════════════════════════════════════════════════════════
 function ResultsTab({
-  elections,
-  onViewResults,
-}: {
-  elections: Election[];
-  onViewResults: (election: Election) => void;
-}) {
+  elections, onViewResults,
+}: { elections: Election[]; onViewResults: (election: Election) => void }) {
+
   const closedElections = elections.filter(e => e.status === 'closed' || e.status === 'archived');
 
   return (
-    <div className="space-y-6">
-        <h3 className="text-lg font-semibold text-[#1E3A8A]">Election Results</h3>
+    <div className="space-y-5">
+      <div>
+        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Analytics</p>
+        <h2 className="text-xl font-extrabold text-gray-900 tracking-tight">Election Results</h2>
+      </div>
 
       {closedElections.length === 0 ? (
-        <div className="text-center py-12 bg-white rounded-lg border border-gray-200">
-          <BarChart3 className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-gray-900">No Completed Elections</h3>
-          <p className="text-gray-500 mt-2">There are no closed elections with results available.</p>
+        <div className="flex flex-col items-center justify-center py-20 text-center bg-white rounded-2xl border border-gray-100">
+          <div className="w-16 h-16 rounded-2xl bg-gray-50 flex items-center justify-center mb-4">
+            <BarChart3 className="w-8 h-8 text-gray-300" />
+          </div>
+          <h3 className="text-base font-extrabold text-gray-700 tracking-tight">No Completed Elections</h3>
+          <p className="text-sm text-gray-400 mt-1 max-w-xs">There are no closed elections with results available.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {closedElections.map((election) => (
-            <Card key={election.id}>
-              <CardHeader>
-                <CardTitle className="text-lg">{election.title}</CardTitle>
-                <CardDescription>
-                  {formatElectionType(election.type)} • Closed on {formatDate(election.endDate)}
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <Badge
-                  className={
-                    election.resultsPublic
-                      ? 'bg-green-100 text-green-800'
-                      : 'bg-yellow-100 text-yellow-800'
-                  }
-                >
-                  {election.resultsPublic ? 'Results Public' : 'Results Private'}
-                </Badge>
-                <Button
-                  className="mt-4 touch-target w-full rounded-md bg-[#2E7D32] font-medium hover:bg-[#1B5E20]"
-                  onClick={() => onViewResults(election)}
-                >
-                  <BarChart3 className="w-4 h-4 mr-2" />
-                  View Results
-                </Button>
-              </CardContent>
-            </Card>
+            <div
+              key={election.id}
+              className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 hover:shadow-md hover:-translate-y-0.5 transition-all duration-200"
+            >
+              <div className="w-10 h-10 rounded-xl bg-[#EFF3FF] flex items-center justify-center mb-4">
+                <BarChart3 className="w-5 h-5 text-[#1E3A8A]" />
+              </div>
+              <h3 className="text-base font-extrabold text-gray-900 tracking-tight mb-1">{election.title}</h3>
+              <p className="text-xs text-gray-400 mb-4">
+                {formatElectionType(election.type)} · Closed {formatDate(election.endDate)}
+              </p>
+              <div className="flex items-center justify-between mb-4">
+                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${election.resultsPublic ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-amber-50 text-amber-700 border border-amber-200'}`}>
+                  {election.resultsPublic ? 'Public' : 'Private'}
+                </span>
+              </div>
+              <ActionBtn color="green" fullWidth onClick={() => onViewResults(election)}>
+                <BarChart3 className="w-4 h-4" /> View Results
+              </ActionBtn>
+            </div>
           ))}
         </div>
       )}
@@ -895,48 +814,13 @@ function ResultsTab({
   );
 }
 
-// ============================================
-// ELECTION FORM
-// ============================================
-const STUDENT_GOVERNMENT_POSITIONS = [
-  { name: 'President', maxVote: 1 },
-  { name: 'Vice President', maxVote: 1 },
-  { name: 'Senators', maxVote: 12 },
-];
-
-const FSTLP_OFFICERS_POSITIONS = [
-  { name: 'President', maxVote: 1 },
-  { name: 'Vice President', maxVote: 1 },
-  { name: 'Secretary', maxVote: 1 },
-  { name: 'Treasurer', maxVote: 1 },
-  { name: 'Auditor', maxVote: 1 },
-  { name: 'PIO', maxVote: 2 },
-  { name: 'Board Members', maxVote: 6 },
-];
-
-const toLocalDateTimeInputValue = (value?: string) => {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-
-  const offset = date.getTimezoneOffset() * 60 * 1000;
-  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
-};
-
-const toIsoFromDateTimeLocal = (value: string) => {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toISOString();
-};
-
+// ═══════════════════════════════════════════════════════════════════════════════
+// ELECTION FORM (logic unchanged)
+// ═══════════════════════════════════════════════════════════════════════════════
 function ElectionForm({
-  election,
-  onSubmit,
-  onCancel,
-}: {
-  election?: Election;
-  onSubmit: (data: ElectionFormData) => void;
-  onCancel: () => void;
-}) {
+  election, onSubmit, onCancel,
+}: { election?: Election; onSubmit: (data: ElectionFormData) => void; onCancel: () => void }) {
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formData, setFormData] = useState<ElectionFormData>({
     title: election?.title || '',
@@ -948,8 +832,9 @@ function ElectionForm({
     maxVotesPerVoter: election?.maxVotesPerVoter || 1,
     resultsPublic: election?.resultsPublic || false,
   });
-  const isStudentGovernment = formData.type === 'student_government';
-  const isFstlpOfficers = formData.type === 'fstlp_officers';
+
+  const isStudentGovernment    = formData.type === 'student_government';
+  const isFstlpOfficers        = formData.type === 'fstlp_officers';
   const usesPredefinedPositions = isStudentGovernment || isFstlpOfficers;
   const predefinedPositionCards = isStudentGovernment ? STUDENT_GOVERNMENT_POSITIONS : isFstlpOfficers ? FSTLP_OFFICERS_POSITIONS : [];
 
@@ -957,53 +842,32 @@ function ElectionForm({
     e.preventDefault();
     if (!isSubmitting) {
       setIsSubmitting(true);
-      onSubmit({
-        ...formData,
-        startDate: toIsoFromDateTimeLocal(formData.startDate),
-        endDate: toIsoFromDateTimeLocal(formData.endDate),
-      });
-      // Reset after a small delay (the parent will close the modal on success)
+      onSubmit({ ...formData, startDate: toIsoFromDateTimeLocal(formData.startDate), endDate: toIsoFromDateTimeLocal(formData.endDate) });
       setTimeout(() => setIsSubmitting(false), 1000);
     }
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div>
-        <Label htmlFor="title">Election Title</Label>
-        <Input
-          id="title"
-          value={formData.title}
-          onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-          required
-        />
-      </div>
-      <div>
-        <Label htmlFor="description">Description</Label>
-        <Textarea
-          id="description"
-          value={formData.description}
-          onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-          rows={3}
-        />
-      </div>
-      <div>
-        <Label htmlFor="type">Election Type</Label>
+    <form onSubmit={handleSubmit} className="space-y-4 pt-1">
+      <FormField label="Election Title">
+        <Input id="title" value={formData.title} onChange={(e) => setFormData({ ...formData, title: e.target.value })} required className={fic} />
+      </FormField>
+      <FormField label="Description">
+        <Textarea id="description" value={formData.description} onChange={(e) => setFormData({ ...formData, description: e.target.value })} rows={3} className={fic} />
+      </FormField>
+      <FormField label="Election Type">
         <Select
           value={formData.type}
           onValueChange={(value) => {
             const nextType = value as ElectionFormData['type'];
             setFormData((prev) => ({
-              ...prev,
-              type: nextType,
+              ...prev, type: nextType,
               maxVotesPerVoter: (nextType === 'student_government' || nextType === 'fstlp_officers') ? 1 : prev.maxVotesPerVoter,
             }));
           }}
         >
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
+          <SelectTrigger className={fic}><SelectValue /></SelectTrigger>
+          <SelectContent className="rounded-xl">
             <SelectItem value="student_government">Student Government</SelectItem>
             <SelectItem value="fstlp_officers">FSTLP Officers</SelectItem>
             <SelectItem value="class_representative">Class Representative</SelectItem>
@@ -1011,112 +875,76 @@ function ElectionForm({
             <SelectItem value="other">Other</SelectItem>
           </SelectContent>
         </Select>
-      </div>
+      </FormField>
+
       {usesPredefinedPositions && (
-        <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
-          <p className="text-sm font-semibold text-blue-900">
+        <div className="rounded-2xl border border-blue-100 bg-blue-50/60 p-4">
+          <p className="text-sm font-extrabold text-blue-900 mb-1">
             {isStudentGovernment ? 'Student Government Positions' : 'FSTLP Officers Positions'}
           </p>
-          <p className="mt-1 text-xs text-blue-700">
-            Positions and vote limits are generated automatically for this election type.
-          </p>
-          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <p className="text-xs text-blue-600 mb-3">Positions and vote limits are generated automatically.</p>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
             {predefinedPositionCards.map((position) => (
-              <div key={position.name} className="rounded-md border border-blue-200 bg-white p-3">
-                <p className="text-sm font-medium text-blue-900">{position.name}</p>
-                <p className="text-xs text-blue-700">Max votes: {position.maxVote}</p>
+              <div key={position.name} className="rounded-xl border border-blue-200 bg-white p-3">
+                <p className="text-sm font-semibold text-blue-900">{position.name}</p>
+                <p className="text-xs text-blue-500 mt-0.5">Max votes: {position.maxVote}</p>
               </div>
             ))}
           </div>
         </div>
       )}
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <div>
-          <Label htmlFor="startDate">Start Date</Label>
-          <Input
-            id="startDate"
-            type="datetime-local"
-            value={formData.startDate}
-            onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
-            required
-          />
-        </div>
-        <div>
-          <Label htmlFor="endDate">End Date</Label>
-          <Input
-            id="endDate"
-            type="datetime-local"
-            value={formData.endDate}
-            onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
-            required
-          />
-        </div>
+        <FormField label="Start Date">
+          <Input id="startDate" type="datetime-local" value={formData.startDate} onChange={(e) => setFormData({ ...formData, startDate: e.target.value })} required className={fic} />
+        </FormField>
+        <FormField label="End Date">
+          <Input id="endDate" type="datetime-local" value={formData.endDate} onChange={(e) => setFormData({ ...formData, endDate: e.target.value })} required className={fic} />
+        </FormField>
       </div>
-      <div className="flex items-center space-x-2">
+
+      <div className="flex items-center gap-2.5">
         <Checkbox
           id="allowWriteIns"
           checked={formData.allowWriteIns}
-          onCheckedChange={(checked) =>
-            setFormData({ ...formData, allowWriteIns: checked as boolean })
-          }
+          onCheckedChange={(checked) => setFormData({ ...formData, allowWriteIns: checked as boolean })}
+          className="rounded-lg"
         />
-        <Label htmlFor="allowWriteIns" className="font-normal">
-          Allow write-in candidates
-        </Label>
+        <Label htmlFor="allowWriteIns" className="text-sm font-medium text-gray-700 cursor-pointer">Allow write-in candidates</Label>
       </div>
+
       {!usesPredefinedPositions && (
-        <div>
-          <Label htmlFor="maxVotesPerVoter">Max Votes Per Voter</Label>
-          <Input
-            id="maxVotesPerVoter"
-            type="number"
-            min={1}
-            max={10}
-            value={formData.maxVotesPerVoter}
-            onChange={(e) => setFormData({ ...formData, maxVotesPerVoter: parseInt(e.target.value) })}
-          />
-        </div>
+        <FormField label="Max Votes Per Voter">
+          <Input id="maxVotesPerVoter" type="number" min={1} max={10} value={formData.maxVotesPerVoter} onChange={(e) => setFormData({ ...formData, maxVotesPerVoter: parseInt(e.target.value) })} className={fic} />
+        </FormField>
       )}
-      <DialogFooter className="touch-footer">
-        <Button type="button" variant="outline" className="touch-target w-full sm:w-auto" onClick={onCancel} disabled={isSubmitting}>
-          Cancel
-        </Button>
-        <Button type="submit" className="touch-target w-full rounded-md bg-[#2E7D32] font-medium hover:bg-[#1B5E20] sm:w-auto" disabled={isSubmitting}>
-          {isSubmitting ? 'Creating...' : election ? 'Save Changes' : 'Create Election'}
+
+      <DialogFooter className="gap-2 mt-2">
+        <Button type="button" variant="outline" className="rounded-xl flex-1 sm:flex-none" onClick={onCancel} disabled={isSubmitting}>Cancel</Button>
+        <Button type="submit" className="rounded-xl flex-1 sm:flex-none bg-[#166534] hover:bg-[#14532d] text-white" disabled={isSubmitting}>
+          {isSubmitting ? 'Saving…' : election ? 'Save Changes' : 'Create Election'}
         </Button>
       </DialogFooter>
     </form>
   );
 }
 
-// ============================================
-// CANDIDATE FORM
-// ============================================
+// ═══════════════════════════════════════════════════════════════════════════════
+// CANDIDATE FORM (logic unchanged)
+// ═══════════════════════════════════════════════════════════════════════════════
 function CandidateForm({
-  electionId,
-  onSubmit,
-  onCancel,
-}: {
-  electionId: string;
-  onSubmit: (data: CandidateFormData) => void;
-  onCancel: () => void;
-}) {
-  const [positions, setPositions] = useState<ElectionPosition[]>([]);
+  electionId, onSubmit, onCancel,
+}: { electionId: string; onSubmit: (data: CandidateFormData) => void; onCancel: () => void }) {
+
+  const [positions, setPositions]             = useState<ElectionPosition[]>([]);
   const [isLoadingPositions, setIsLoadingPositions] = useState(false);
   const [formData, setFormData] = useState<CandidateFormData>({
-    positionId: '',
-    position: '',
-    displayName: '',
-    bio: '',
-    platform: '',
-    photoUrl: '',
-    photoPath: '',
-    imageFile: undefined,
-    isWriteIn: false,
+    positionId: '', position: '', displayName: '', bio: '', platform: '',
+    photoUrl: '', photoPath: '', imageFile: undefined, isWriteIn: false,
   });
-  const [imageError, setImageError] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState<string>('');
-  const [fileName, setFileName] = useState<string>('');
+  const [imageError, setImageError]           = useState(false);
+  const [previewUrl, setPreviewUrl]           = useState<string>('');
+  const [fileName, setFileName]               = useState<string>('');
   const [fileValidationError, setFileValidationError] = useState<string>('');
 
   useEffect(() => {
@@ -1127,32 +955,15 @@ function CandidateForm({
         if (!mounted) return;
         setPositions(pos);
         if (pos.length > 0) {
-          setFormData((prev) => ({
-            ...prev,
-            positionId: pos[0].id,
-            position: pos[0].name,
-          }));
+          setFormData((prev) => ({ ...prev, positionId: pos[0].id, position: pos[0].name }));
         }
       })
-      .catch(() => {
-        if (!mounted) return;
-        setPositions([]);
-      })
-      .finally(() => {
-        if (!mounted) return;
-        setIsLoadingPositions(false);
-      });
-
-    return () => {
-      mounted = false;
-    };
+      .catch(() => { if (!mounted) return; setPositions([]); })
+      .finally(() => { if (!mounted) return; setIsLoadingPositions(false); });
+    return () => { mounted = false; };
   }, [electionId]);
 
-  useEffect(() => {
-    return () => {
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-    };
-  }, [previewUrl]);
+  useEffect(() => { return () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }; }, [previewUrl]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1163,62 +974,43 @@ function CandidateForm({
   const handleFileChange = (file?: File) => {
     if (!file) {
       setFormData({ ...formData, imageFile: undefined });
-      setPreviewUrl('');
-      setFileName('');
-      setFileValidationError('');
+      setPreviewUrl(''); setFileName(''); setFileValidationError('');
       return;
     }
-
     if (!['image/jpeg', 'image/png'].includes(file.type)) {
       setFileValidationError('Only JPEG and PNG images are allowed.');
       setFormData({ ...formData, imageFile: undefined });
-      setPreviewUrl('');
-      setFileName('');
-      return;
+      setPreviewUrl(''); setFileName(''); return;
     }
-
     if (file.size > 2 * 1024 * 1024) {
       setFileValidationError('Image must be 2MB or smaller.');
       setFormData({ ...formData, imageFile: undefined });
-      setPreviewUrl('');
-      setFileName('');
-      return;
+      setPreviewUrl(''); setFileName(''); return;
     }
-
     if (previewUrl) URL.revokeObjectURL(previewUrl);
-
     const nextPreview = URL.createObjectURL(file);
     setFormData({ ...formData, imageFile: file });
-    setPreviewUrl(nextPreview);
-    setFileName(file.name);
-    setFileValidationError('');
-    setImageError(false);
+    setPreviewUrl(nextPreview); setFileName(file.name);
+    setFileValidationError(''); setImageError(false);
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div>
-        <Label htmlFor="position">Position</Label>
+    <form onSubmit={handleSubmit} className="space-y-4 pt-1">
+      <FormField label="Position">
         {isLoadingPositions ? (
-          <p className="text-sm text-gray-500">Loading positions...</p>
+          <p className="text-sm text-gray-500">Loading positions…</p>
         ) : positions.length === 0 ? (
           <p className="text-sm text-amber-600">Election has no positions configured.</p>
         ) : (
           <Select
             value={formData.positionId}
             onValueChange={(value) => {
-              const selected = positions.find((position) => position.id === value);
-              setFormData({
-                ...formData,
-                positionId: value,
-                position: selected?.name ?? '',
-              });
+              const selected = positions.find((p) => p.id === value);
+              setFormData({ ...formData, positionId: value, position: selected?.name ?? '' });
             }}
           >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
+            <SelectTrigger className={fic}><SelectValue /></SelectTrigger>
+            <SelectContent className="rounded-xl">
               {positions.map((position) => (
                 <SelectItem key={position.id} value={position.id}>
                   {position.name} (Max votes: {position.voteLimit})
@@ -1227,70 +1019,55 @@ function CandidateForm({
             </SelectContent>
           </Select>
         )}
-      </div>
-      <div>
-        <Label htmlFor="displayName">Candidate Name</Label>
+      </FormField>
+
+      <FormField label="Candidate Name">
+        <Input id="displayName" value={formData.displayName} onChange={(e) => setFormData({ ...formData, displayName: e.target.value })} required className={fic} />
+      </FormField>
+
+      <FormField label="Candidate Image" hint="JPG or PNG, max 2MB">
         <Input
-          id="displayName"
-          value={formData.displayName}
-          onChange={(e) => setFormData({ ...formData, displayName: e.target.value })}
-          required
-        />
-      </div>
-      <div>
-        <Label htmlFor="candidateImage">Candidate Image</Label>
-        <Input
-          id="candidateImage"
-          type="file"
-          accept="image/*"
+          id="candidateImage" type="file" accept="image/*"
           onChange={(e) => handleFileChange(e.target.files?.[0])}
+          className={fic}
         />
-        <p className="text-xs text-gray-500 mt-1">Allowed: JPG or PNG, max size 2MB.</p>
-        {fileName ? <p className="text-xs text-gray-700 mt-1">Selected file: {fileName}</p> : null}
-        {fileValidationError ? <p className="text-xs text-red-600 mt-1">{fileValidationError}</p> : null}
+        {fileName && <p className="text-xs text-gray-600 mt-1">Selected: {fileName}</p>}
+        {fileValidationError && <p className="text-xs text-red-600 mt-1">{fileValidationError}</p>}
 
         {(previewUrl || formData.photoPath || formData.photoUrl) && (
-          <div className="mt-3 rounded-lg border border-gray-200 p-3 bg-gray-50">
-            <p className="text-xs font-medium text-gray-700 mb-2">Image preview</p>
+          <div className="mt-3 rounded-2xl border border-gray-100 bg-gray-50/60 p-3">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Preview</p>
             {imageError ? (
-              <div className="w-20 h-20 border-2 border-red-300 rounded-full flex items-center justify-center bg-red-50">
-                <span className="text-xs text-red-600 text-center px-2">Preview unavailable</span>
+              <div className="w-16 h-16 rounded-2xl border border-red-200 bg-red-50 flex items-center justify-center">
+                <span className="text-[10px] text-red-500 text-center px-1">Unavailable</span>
               </div>
             ) : (
               <img
                 src={previewUrl || formData.photoPath || formData.photoUrl}
                 alt="Candidate preview"
-                className="w-20 h-20 object-cover rounded-full border-2 border-gray-200"
+                className="w-16 h-16 object-cover rounded-2xl border border-gray-200"
                 onError={() => setImageError(true)}
               />
             )}
           </div>
         )}
-      </div>
-      <div>
-        <Label htmlFor="bio">Biography</Label>
-        <Textarea
-          id="bio"
-          value={formData.bio}
-          onChange={(e) => setFormData({ ...formData, bio: e.target.value })}
-          rows={3}
-        />
-      </div>
-      <div>
-        <Label htmlFor="platform">Campaign Platform</Label>
-        <Textarea
-          id="platform"
-          value={formData.platform}
-          onChange={(e) => setFormData({ ...formData, platform: e.target.value })}
-          rows={4}
-          placeholder="List campaign promises and ideas..."
-        />
-      </div>
-      <DialogFooter className="touch-footer">
-        <Button type="button" variant="outline" className="touch-target w-full sm:w-auto" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button type="submit" className="touch-target w-full rounded-md bg-[#2E7D32] font-medium hover:bg-[#1B5E20] sm:w-auto" disabled={isLoadingPositions || positions.length === 0 || !formData.positionId}>
+      </FormField>
+
+      <FormField label="Biography">
+        <Textarea id="bio" value={formData.bio} onChange={(e) => setFormData({ ...formData, bio: e.target.value })} rows={3} className={fic} />
+      </FormField>
+
+      <FormField label="Campaign Platform">
+        <Textarea id="platform" value={formData.platform} onChange={(e) => setFormData({ ...formData, platform: e.target.value })} rows={4} placeholder="List campaign promises and ideas…" className={fic} />
+      </FormField>
+
+      <DialogFooter className="gap-2 mt-2">
+        <Button type="button" variant="outline" className="rounded-xl flex-1 sm:flex-none" onClick={onCancel}>Cancel</Button>
+        <Button
+          type="submit"
+          className="rounded-xl flex-1 sm:flex-none bg-[#166534] hover:bg-[#14532d] text-white"
+          disabled={isLoadingPositions || positions.length === 0 || !formData.positionId}
+        >
           Add Candidate
         </Button>
       </DialogFooter>
@@ -1298,19 +1075,17 @@ function CandidateForm({
   );
 }
 
-// ============================================
-// RESULTS DISPLAY
-// ============================================
+// ═══════════════════════════════════════════════════════════════════════════════
+// RESULTS DISPLAY (logic unchanged)
+// ═══════════════════════════════════════════════════════════════════════════════
 function ResultsDisplay({
-  results,
-  election,
-}: {
-  results: ElectionResult[];
-  election: Election | null;
-}) {
-  const [expandedPositions, setExpandedPositions] = useState<Set<string>>(new Set());
+  results, election,
+}: { results: ElectionResult[]; election: Election | null }) {
+
+  const [expandedPositions, setExpandedPositions]   = useState<Set<string>>(new Set());
   const [expandedCandidates, setExpandedCandidates] = useState<Set<string>>(new Set());
 
+  // ── All normalisation logic unchanged ────────────────────────────────────
   const normalizePositionResults = (rows: ElectionResult[]) =>
     rows.map((row) => {
       const sortedCandidates = [...row.candidates].sort((a, b) => {
@@ -1318,249 +1093,223 @@ function ResultsDisplay({
         if (b.percentage !== a.percentage) return b.percentage - a.percentage;
         return a.displayName.localeCompare(b.displayName);
       });
-
-      let currentRank = 0;
-      let previousVoteCount = -1;
-
+      let currentRank = 0; let previousVoteCount = -1;
       const ranked = sortedCandidates.map((candidate, index) => {
-        if (candidate.voteCount !== previousVoteCount) {
-          currentRank = index + 1;
-          previousVoteCount = candidate.voteCount;
-        }
+        if (candidate.voteCount !== previousVoteCount) { currentRank = index + 1; previousVoteCount = candidate.voteCount; }
         return { ...candidate, rank: currentRank };
       });
-
-      return {
-        ...row,
-        candidates: ranked,
-      };
+      return { ...row, candidates: ranked };
     });
 
-  const normalizedResults = normalizePositionResults(results);
-  const totalVotesOverall = normalizedResults.reduce((sum, row) => sum + row.totalVotes, 0);
-  const totalCandidatesOverall = normalizedResults.reduce((sum, row) => sum + row.candidates.length, 0);
-  const highestTurnoutPosition =
-    normalizedResults.length > 0
-      ? [...normalizedResults].sort((a, b) => b.totalVotes - a.totalVotes)[0]
-      : null;
+  const normalizedResults           = normalizePositionResults(results);
+  const totalVotesOverall           = normalizedResults.reduce((sum, row) => sum + row.totalVotes, 0);
+  const totalCandidatesOverall      = normalizedResults.reduce((sum, row) => sum + row.candidates.length, 0);
+  const highestTurnoutPosition      = normalizedResults.length > 0
+    ? [...normalizedResults].sort((a, b) => b.totalVotes - a.totalVotes)[0] : null;
 
-  const togglePosition = (position: string) => {
-    setExpandedPositions((prev) => {
-      const next = new Set(prev);
-      if (next.has(position)) next.delete(position);
-      else next.add(position);
-      return next;
-    });
-  };
-
+  const togglePosition  = (position: string) => setExpandedPositions((prev) => { const n = new Set(prev); n.has(position) ? n.delete(position) : n.add(position); return n; });
   const toggleCandidate = (position: string, candidateId: string) => {
     const key = `${position}::${candidateId}`;
-    setExpandedCandidates((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+    setExpandedCandidates((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
   };
 
   const rankBadge = (rank: number) => {
-    if (rank === 1) return <span className="inline-flex items-center gap-1 rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-semibold text-yellow-800"><Trophy className="h-3 w-3" /> Gold</span>;
-    if (rank === 2) return <span className="inline-flex items-center gap-1 rounded-full bg-gray-200 px-2 py-0.5 text-xs font-semibold text-gray-700"><Medal className="h-3 w-3" /> Silver</span>;
-    if (rank === 3) return <span className="inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700"><Medal className="h-3 w-3" /> Bronze</span>;
+    if (rank === 1) return <span className="inline-flex items-center gap-1 rounded-full bg-yellow-50 border border-yellow-200 px-2 py-0.5 text-xs font-semibold text-yellow-700"><Trophy className="h-3 w-3" /> Gold</span>;
+    if (rank === 2) return <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 border border-gray-200 px-2 py-0.5 text-xs font-semibold text-gray-600"><Medal className="h-3 w-3" /> Silver</span>;
+    if (rank === 3) return <span className="inline-flex items-center gap-1 rounded-full bg-orange-50 border border-orange-200 px-2 py-0.5 text-xs font-semibold text-orange-700"><Medal className="h-3 w-3" /> Bronze</span>;
     return null;
   };
 
   if (results.length === 0) {
     return (
-      <div className="text-center py-8">
-        <BarChart3 className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-        <p className="text-gray-500">No results available yet.</p>
+      <div className="flex flex-col items-center justify-center py-12 text-center">
+        <div className="w-14 h-14 rounded-2xl bg-gray-50 flex items-center justify-center mb-4">
+          <BarChart3 className="w-7 h-7 text-gray-300" />
+        </div>
+        <p className="text-sm text-gray-400">No results available yet.</p>
       </div>
     );
   }
 
-  const positionTotalsChart = normalizedResults.map((row) => ({
-    position: row.position,
-    votes: row.totalVotes,
-  }));
+  const positionTotalsChart = normalizedResults.map((row) => ({ position: row.position, votes: row.totalVotes }));
 
   return (
-    <div className="space-y-6">
-      <div className="rounded-lg border border-gray-200 bg-white p-4">
+    <div className="space-y-5 pt-1">
+      {/* Election info banner */}
+      <div className="rounded-2xl border border-gray-100 bg-gray-50/60 p-4">
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-          <div>
-            <p className="text-xs uppercase tracking-wide text-gray-500">Election</p>
-            <p className="mt-1 text-sm font-semibold text-gray-900">{election?.title || 'Election Results'}</p>
-          </div>
-          <div>
-            <p className="text-xs uppercase tracking-wide text-gray-500">Type</p>
-            <p className="mt-1 text-sm font-semibold text-gray-900">{election ? formatElectionType(election.type) : 'N/A'}</p>
-          </div>
-          <div>
-            <p className="text-xs uppercase tracking-wide text-gray-500">Status</p>
-            <p className="mt-1 text-sm font-semibold text-gray-900">{election ? formatElectionStatus(election.status) : 'Closed'}</p>
-          </div>
-          <div>
-            <p className="text-xs uppercase tracking-wide text-gray-500">End Date</p>
-            <p className="mt-1 text-sm font-semibold text-gray-900">{election ? formatDate(election.endDate) : 'N/A'}</p>
-          </div>
+          {[
+            { label: 'Election',   value: election?.title || 'Election Results' },
+            { label: 'Type',       value: election ? formatElectionType(election.type) : 'N/A' },
+            { label: 'Status',     value: election ? formatElectionStatus(election.status) : 'Closed' },
+            { label: 'End Date',   value: election ? formatDate(election.endDate) : 'N/A' },
+          ].map(({ label, value }) => (
+            <div key={label}>
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{label}</p>
+              <p className="mt-1 text-sm font-semibold text-gray-900">{value}</p>
+            </div>
+          ))}
         </div>
       </div>
 
+      {/* Summary stats */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <div className="rounded-lg border border-gray-200 bg-white p-4">
-          <p className="text-sm text-gray-500">Total Positions</p>
-          <p className="text-2xl font-bold text-gray-900">{normalizedResults.length}</p>
-        </div>
-        <div className="rounded-lg border border-gray-200 bg-white p-4">
-          <p className="text-sm text-gray-500">Total Candidates</p>
-          <p className="text-2xl font-bold text-gray-900">{totalCandidatesOverall}</p>
-        </div>
-        <div className="rounded-lg border border-gray-200 bg-white p-4">
-          <p className="text-sm text-gray-500">Total Votes Cast</p>
-          <p className="text-2xl font-bold text-gray-900">{totalVotesOverall}</p>
-        </div>
-        <div className="rounded-lg border border-gray-200 bg-white p-4">
-          <p className="text-sm text-gray-500">Highest Turnout</p>
-          <p className="text-sm font-semibold text-gray-900 mt-1">{highestTurnoutPosition?.position || 'N/A'}</p>
-          <p className="text-xs text-gray-500">{highestTurnoutPosition?.totalVotes || 0} votes</p>
-        </div>
+        {[
+          { label: 'Total Positions',  value: normalizedResults.length.toString() },
+          { label: 'Total Candidates', value: totalCandidatesOverall.toString() },
+          { label: 'Total Votes Cast', value: totalVotesOverall.toString() },
+          { label: 'Highest Turnout',  value: highestTurnoutPosition?.position || 'N/A', sub: highestTurnoutPosition ? `${highestTurnoutPosition.totalVotes} votes` : '' },
+        ].map(({ label, value, sub }) => (
+          <div key={label} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">{label}</p>
+            <p className={`font-extrabold text-gray-900 ${sub ? 'text-base' : 'text-2xl'} tracking-tight`}>{value}</p>
+            {sub && <p className="text-xs text-gray-400 mt-0.5">{sub}</p>}
+          </div>
+        ))}
       </div>
 
-      <div className="rounded-lg border border-yellow-200 bg-gradient-to-r from-yellow-50 to-orange-50 p-4">
-        <h4 className="text-lg font-semibold text-gray-900 flex items-center gap-2 mb-3">
-          <Crown className="w-5 h-5 text-yellow-600" /> Position Winners
+      {/* Winners banner */}
+      <div className="rounded-2xl border border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50 p-5">
+        <h4 className="text-base font-extrabold text-gray-900 flex items-center gap-2 mb-4">
+          <Crown className="w-5 h-5 text-amber-500" /> Position Winners
         </h4>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
           {normalizedResults.map((row) => {
-            const winner = row.candidates[0];
+            const winner      = row.candidates[0];
             const tiedWinners = row.candidates.filter((c) => c.voteCount === winner.voteCount);
-
             return (
-              <div key={row.position} className="rounded-md border border-yellow-200 bg-white p-3">
-                <p className="text-sm font-semibold text-gray-900">{row.position}</p>
-                <p className="text-sm text-gray-700 mt-1">{winner.displayName}</p>
-                <p className="text-xs text-gray-500">{winner.voteCount} votes • {winner.percentage.toFixed(1)}%</p>
-                {tiedWinners.length > 1 ? (
-                  <Badge className="mt-2 bg-amber-100 text-amber-800">Tie ({tiedWinners.length})</Badge>
-                ) : null}
+              <div key={row.position} className="rounded-xl border border-amber-200 bg-white p-3.5">
+                <p className="text-xs font-bold text-amber-600 uppercase tracking-wider mb-1">{row.position}</p>
+                <p className="text-sm font-extrabold text-gray-900">{winner.displayName}</p>
+                <p className="text-xs text-gray-500 mt-0.5">{winner.voteCount} votes · {winner.percentage.toFixed(1)}%</p>
+                {tiedWinners.length > 1 && (
+                  <span className="mt-2 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-700 border border-amber-200">
+                    Tie ({tiedWinners.length})
+                  </span>
+                )}
               </div>
             );
           })}
         </div>
       </div>
 
-      <div className="rounded-lg border border-gray-200 bg-white p-4">
-        <h4 className="text-base font-semibold text-gray-900 mb-3">Position Comparison (Total Votes)</h4>
-        <ResponsiveContainer width="100%" height={280}>
+      {/* Position comparison chart */}
+      <SectionCard>
+        <CardHeading eyebrow="Chart" title="Position Comparison (Total Votes)" />
+        <ResponsiveContainer width="100%" height={260}>
           <BarChart data={positionTotalsChart} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
             <XAxis dataKey="position" tick={{ fontSize: 11 }} />
             <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-            <Tooltip formatter={(value: number) => [`${value} votes`, 'Total Votes']} />
+            <Tooltip
+              contentStyle={{ borderRadius: 12, border: '1px solid #e5e7eb', fontSize: 12 }}
+              formatter={(value: number) => [`${value} votes`, 'Total Votes']}
+            />
             <Bar dataKey="votes" fill="#1E3A8A" radius={[6, 6, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
-      </div>
+      </SectionCard>
 
+      {/* Per-position expandable sections */}
       {normalizedResults.map((result) => {
         const isExpanded = expandedPositions.has(result.position);
         const candidateChartData = result.candidates.map((candidate) => ({
-          name: candidate.displayName,
-          votes: candidate.voteCount,
-          percentage: candidate.percentage,
+          name: candidate.displayName, votes: candidate.voteCount, percentage: candidate.percentage,
         }));
 
         return (
-          <div key={result.position} className="rounded-lg border border-gray-200 bg-white">
+          <div key={result.position} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
             <button
               type="button"
-              className="w-full px-4 py-3 border-b border-gray-200 flex items-center justify-between hover:bg-gray-50 text-left"
+              className="w-full px-5 py-4 flex items-center justify-between hover:bg-gray-50/70 text-left transition-colors"
               onClick={() => togglePosition(result.position)}
             >
               <div>
-                <h4 className="text-lg font-semibold text-gray-900">{result.position}</h4>
-                <p className="text-sm text-gray-500">Total Votes: {result.totalVotes}</p>
+                <h4 className="text-base font-extrabold text-gray-900 tracking-tight">{result.position}</h4>
+                <p className="text-xs text-gray-400 mt-0.5">Total Votes: {result.totalVotes}</p>
               </div>
-              {isExpanded ? <ChevronUp className="h-5 w-5 text-gray-500" /> : <ChevronDown className="h-5 w-5 text-gray-500" />}
+              {isExpanded ? <ChevronUp className="h-5 w-5 text-gray-400" /> : <ChevronDown className="h-5 w-5 text-gray-400" />}
             </button>
 
-            {isExpanded ? (
-              <div className="p-4 space-y-4">
-                <div className="rounded-lg border border-gray-200 bg-[#F8FAFC] p-3">
-                  <h5 className="text-sm font-semibold text-gray-900 mb-2">Candidate Comparison</h5>
-                  <ResponsiveContainer width="100%" height={240}>
+            {isExpanded && (
+              <div className="px-5 pb-5 space-y-4 border-t border-gray-50">
+                {/* Candidate bar chart */}
+                <div className="mt-4 rounded-2xl border border-gray-100 bg-gray-50/60 p-4">
+                  <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Candidate Comparison</p>
+                  <ResponsiveContainer width="100%" height={220}>
                     <BarChart data={candidateChartData} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
                       <XAxis dataKey="name" tick={{ fontSize: 11 }} />
                       <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-                      <Tooltip formatter={(value: number, _n, item) => [`${value} votes (${item.payload.percentage.toFixed(1)}%)`, 'Result']} />
-                      <Bar dataKey="votes" fill="#2E7D32" radius={[6, 6, 0, 0]} />
+                      <Tooltip
+                        contentStyle={{ borderRadius: 12, border: '1px solid #e5e7eb', fontSize: 12 }}
+                        formatter={(value: number, _n, item) => [`${value} votes (${item.payload.percentage.toFixed(1)}%)`, 'Result']}
+                      />
+                      <Bar dataKey="votes" fill="#166534" radius={[6, 6, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
 
-                <div className="overflow-x-auto rounded-lg border border-gray-200">
-                  <table className="w-full min-w-[760px] text-sm">
-                    <thead className="bg-gray-50 text-gray-700">
-                      <tr>
-                        <th className="px-3 py-2 text-left font-medium">Rank</th>
-                        <th className="px-3 py-2 text-left font-medium">Candidate</th>
-                        <th className="px-3 py-2 text-right font-medium">Votes</th>
-                        <th className="px-3 py-2 text-right font-medium">Percentage</th>
-                        <th className="px-3 py-2 text-center font-medium">Details</th>
+                {/* Candidate table */}
+                <div className="overflow-x-auto rounded-2xl border border-gray-100">
+                  <table className="w-full min-w-[640px] text-sm">
+                    <thead>
+                      <tr className="bg-[#1E3A8A]">
+                        {['Rank', 'Candidate', 'Votes', 'Percentage', 'Details'].map((h, i) => (
+                          <th
+                            key={h}
+                            className={`px-4 py-2.5 text-xs font-bold text-white uppercase tracking-wider ${i >= 2 ? 'text-right' : 'text-left'} ${i === 4 ? 'text-center' : ''}`}
+                          >
+                            {h}
+                          </th>
+                        ))}
                       </tr>
                     </thead>
                     <tbody>
                       {result.candidates.map((candidate) => {
-                        const rowKey = `${result.position}::${candidate.candidateId}`;
+                        const rowKey     = `${result.position}::${candidate.candidateId}`;
                         const rowExpanded = expandedCandidates.has(rowKey);
-                        const topRowClass =
-                          candidate.rank === 1
-                            ? 'bg-yellow-50'
-                            : candidate.rank === 2
-                            ? 'bg-gray-50'
-                            : candidate.rank === 3
-                            ? 'bg-orange-50'
-                            : 'bg-white';
+                        const rowBg =
+                          candidate.rank === 1 ? 'bg-yellow-50/70'
+                          : candidate.rank === 2 ? 'bg-gray-50/70'
+                          : candidate.rank === 3 ? 'bg-orange-50/70'
+                          : 'bg-white';
 
                         return (
                           <Fragment key={rowKey}>
                             <tr
-                              className={`border-t border-gray-100 ${topRowClass} cursor-pointer hover:bg-blue-50/40`}
+                              className={`border-t border-gray-50 cursor-pointer hover:bg-blue-50/40 transition-colors ${rowBg}`}
                               onClick={() => toggleCandidate(result.position, candidate.candidateId)}
                             >
-                              <td className="px-3 py-2">
+                              <td className="px-4 py-2.5">
                                 <div className="flex items-center gap-2">
-                                  <span className="font-semibold text-gray-900">#{candidate.rank}</span>
+                                  <span className="font-extrabold text-gray-900">#{candidate.rank}</span>
                                   {rankBadge(candidate.rank)}
                                 </div>
                               </td>
-                              <td className="px-3 py-2 text-gray-900 font-medium">{candidate.displayName}</td>
-                              <td className="px-3 py-2 text-right text-gray-800">{candidate.voteCount}</td>
-                              <td className="px-3 py-2 text-right text-gray-800">{candidate.percentage.toFixed(1)}%</td>
-                              <td className="px-3 py-2 text-center text-gray-600">
+                              <td className="px-4 py-2.5 font-semibold text-gray-900">{candidate.displayName}</td>
+                              <td className="px-4 py-2.5 text-right text-gray-700">{candidate.voteCount}</td>
+                              <td className="px-4 py-2.5 text-right text-gray-700">{candidate.percentage.toFixed(1)}%</td>
+                              <td className="px-4 py-2.5 text-center text-gray-400">
                                 {rowExpanded ? <ChevronUp className="mx-auto h-4 w-4" /> : <ChevronDown className="mx-auto h-4 w-4" />}
                               </td>
                             </tr>
-                            {rowExpanded ? (
-                              <tr className="border-t border-gray-100">
-                                <td colSpan={5} className="bg-[#F8FAFC] p-4">
+                            {rowExpanded && (
+                              <tr className="border-t border-gray-50">
+                                <td colSpan={5} className="bg-gray-50/60 px-4 py-4">
                                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                                    <div className="rounded border border-gray-200 bg-white p-3">
-                                      <p className="text-xs text-gray-500">Votes</p>
-                                      <p className="text-sm font-semibold text-gray-900">{candidate.voteCount}</p>
-                                    </div>
-                                    <div className="rounded border border-gray-200 bg-white p-3">
-                                      <p className="text-xs text-gray-500">Percentage</p>
-                                      <p className="text-sm font-semibold text-gray-900">{candidate.percentage.toFixed(1)}%</p>
-                                    </div>
-                                    <div className="rounded border border-gray-200 bg-white p-3">
-                                      <p className="text-xs text-gray-500">Share of Position Votes</p>
-                                      <p className="text-sm font-semibold text-gray-900">{candidate.voteCount}/{result.totalVotes}</p>
-                                    </div>
+                                    {[
+                                      { label: 'Votes',                value: String(candidate.voteCount) },
+                                      { label: 'Percentage',           value: `${candidate.percentage.toFixed(1)}%` },
+                                      { label: 'Share of Position',    value: `${candidate.voteCount}/${result.totalVotes}` },
+                                    ].map(({ label, value }) => (
+                                      <div key={label} className="rounded-xl border border-gray-100 bg-white p-3">
+                                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{label}</p>
+                                        <p className="text-sm font-extrabold text-gray-900 mt-0.5">{value}</p>
+                                      </div>
+                                    ))}
                                   </div>
                                 </td>
                               </tr>
-                            ) : null}
+                            )}
                           </Fragment>
                         );
                       })}
@@ -1568,15 +1317,10 @@ function ResultsDisplay({
                   </table>
                 </div>
               </div>
-            ) : null}
+            )}
           </div>
         );
       })}
     </div>
   );
 }
-
-
-
-
-

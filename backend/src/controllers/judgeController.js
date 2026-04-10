@@ -4,6 +4,22 @@ const hasJudgeRole = (roles) => Array.isArray(roles) && roles.includes('judge');
 
 const formatJudgeName = (judge) => `${judge.first_name} ${judge.last_name}`.trim();
 
+const extractJoinedUser = (users) => {
+  if (Array.isArray(users)) return users[0] ?? null;
+  return users ?? null;
+};
+
+const resolveJudgeName = (assignment) => {
+  if (assignment?.judge_name?.trim()) return assignment.judge_name.trim();
+
+  const joinedUser = extractJoinedUser(assignment?.users);
+  const firstName = joinedUser?.first_name?.trim() ?? '';
+  const lastName = joinedUser?.last_name?.trim() ?? '';
+  const fullName = `${firstName} ${lastName}`.trim();
+
+  return fullName || 'Unknown';
+};
+
 async function assignJudgeToPageant({ pageantId, judge, assignedBy }) {
   const { data, error } = await supabase
     .from('pageant_judges')
@@ -33,7 +49,15 @@ export const getJudges = async (req, res) => {
     .eq('pageant_id', req.params.pageantId)
     .eq('is_active', true);
   if (error) throw error;
-  res.json(data);
+
+  // Backfill missing judge_name values from joined user profile so UI
+  // always has a displayable name even for legacy rows.
+  const normalized = (data ?? []).map((assignment) => ({
+    ...assignment,
+    judge_name: resolveJudgeName(assignment),
+  }));
+
+  res.json(normalized);
 };
 
 // GET /api/pageants/:pageantId/judges/available

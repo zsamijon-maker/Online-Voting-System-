@@ -1,93 +1,182 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  Vote,
-  CheckCircle,
-  Clock,
-  Calendar,
-  User as UserIcon,
-  AlertCircle,
-  Info,
-  LogOut,
-  Menu,
-  X,
+  Vote, CheckCircle, Clock, Calendar, User as UserIcon,
+  AlertCircle, Info, LogOut, Menu, X, TrendingUp,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNotification } from '@/contexts/NotificationContext';
 import {
-  getActiveElections,
-  getCandidatesByPosition,
-  getElectionPositions,
-  castVote,
-  getUserVotes,
+  getActiveElections, getAllElections, getCandidatesByPosition, getElectionPositions,
+  castVote, getElectionResults, getUserVotes,
 } from '@/services/electionService';
-import type { Election, Candidate, ElectionPosition, Vote as VoteType, User } from '@/types';
+import type { Election, Candidate, ElectionPosition, ElectionResult, Vote as VoteType, User } from '@/types';
 import { formatDate, formatDateTime, formatElectionType } from '@/utils/formatters';
 import { useSupabaseProfile, DEFAULT_PROFILE_AVATAR } from '@/hooks/useSupabaseProfile';
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle,
+  DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 
+// ─── Shared design primitives (same system as AdminDashboard) ─────────────────
+
+const NAV = [
+  { value: 'overview',  label: 'Overview',           icon: TrendingUp },
+  { value: 'elections', label: 'Active Elections',    icon: Vote },
+  { value: 'history',   label: 'My Voting History',  icon: Clock },
+  { value: 'results',   label: 'Election Results',   icon: TrendingUp },
+  { value: 'profile',   label: 'My Profile',         icon: UserIcon },
+];
+
+const ActionBtn = ({
+  type = 'button', onClick, disabled, children, color = 'blue', fullWidth = false,
+}: {
+  type?: 'button' | 'submit'; onClick?: () => void; disabled?: boolean;
+  children: React.ReactNode; color?: 'blue' | 'green' | 'red' | 'outline'; fullWidth?: boolean;
+}) => {
+  const palette = {
+    blue:    'bg-[#1E3A8A] hover:bg-[#1d3580] text-white shadow-sm shadow-blue-200',
+    green:   'bg-[#166534] hover:bg-[#14532d] text-white shadow-sm shadow-green-200',
+    red:     'bg-red-600 hover:bg-red-700 text-white',
+    outline: 'border border-gray-200 bg-white hover:bg-gray-50 text-gray-700',
+  };
+  return (
+    <button
+      type={type}
+      onClick={onClick}
+      disabled={disabled}
+      className={`
+        inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-semibold
+        rounded-xl transition-all duration-150
+        hover:-translate-y-px active:translate-y-0
+        disabled:opacity-50 disabled:cursor-not-allowed disabled:translate-y-0
+        ${palette[color]}
+        ${fullWidth ? 'w-full' : ''}
+      `}
+    >
+      {children}
+    </button>
+  );
+};
+
+const DataTable = ({ headers, children, empty }: {
+  headers: string[]; children: React.ReactNode; empty?: boolean;
+}) => (
+  <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+    <div className="overflow-x-auto">
+      <table className="min-w-full divide-y divide-gray-100">
+        <thead>
+          <tr className="bg-[#1E3A8A]">
+            {headers.map((h, i) => (
+              <th
+                key={i}
+                className="px-5 py-3 text-left text-xs font-bold text-white uppercase tracking-wider"
+              >
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-50">
+          {empty ? (
+            <tr>
+              <td colSpan={headers.length} className="px-5 py-10 text-center text-sm text-gray-400">
+                No records found.
+              </td>
+            </tr>
+          ) : children}
+        </tbody>
+      </table>
+    </div>
+  </div>
+);
+
+const SectionCard = ({ children, className = '' }: { children: React.ReactNode; className?: string }) => (
+  <div className={`bg-white rounded-2xl border border-gray-100 shadow-sm p-5 ${className}`}>
+    {children}
+  </div>
+);
+
+const CardHeading = ({ eyebrow, title }: { eyebrow?: string; title: string }) => (
+  <div className="mb-5">
+    {eyebrow && <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">{eyebrow}</p>}
+    <h3 className="text-base font-extrabold text-gray-900 tracking-tight">{title}</h3>
+  </div>
+);
+
+// ─── VotingState type (unchanged) ────────────────────────────────────────────
 interface VotingState {
   electionId: string;
   position: string;
   selectedCandidate: string | null;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN COMPONENT
+// ═══════════════════════════════════════════════════════════════════════════════
 export default function VoterDashboard() {
+  // ── All logic unchanged ───────────────────────────────────────────────────
   const { user, logout } = useAuth();
   const { showSuccess, showError } = useNotification();
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab]             = useState('overview');
   const [isLogoutDialogOpen, setIsLogoutDialogOpen] = useState(false);
-  const [elections, setElections] = useState<Election[]>([]);
-  const [userVotes, setUserVotes] = useState<VoteType[]>([]);
+  const [elections, setElections]             = useState<Election[]>([]);
+  const [resultElections, setResultElections] = useState<Election[]>([]);
+  const [userVotes, setUserVotes]             = useState<VoteType[]>([]);
   const [selectedElection, setSelectedElection] = useState<Election | null>(null);
-  const [votingState, setVotingState] = useState<VotingState | null>(null);
+  const [selectedResultElection, setSelectedResultElection] = useState<Election | null>(null);
+  const [selectedElectionResults, setSelectedElectionResults] = useState<ElectionResult[]>([]);
+  const [isLoadingResults, setIsLoadingResults] = useState(false);
+  const [votingState, setVotingState]         = useState<VotingState | null>(null);
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+  const [isLoading, setIsLoading]             = useState(true);
+  const [error, setError]                     = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
-    const activeElections = await getActiveElections();
-    setElections(activeElections);
+    try {
+      setIsLoading(true);
+      setError(null);
+      const [activeElections, allElections] = await Promise.all([
+        getActiveElections(),
+        getAllElections(),
+      ]);
+      setElections(activeElections);
+      setResultElections(allElections.filter((election) => election.resultsPublic));
 
-    if (user) {
-      const allVotes: VoteType[] = [];
-      await Promise.all(
-        activeElections.map(async (election) => {
-          const votes = await getUserVotes(election.id, user.id);
-          allVotes.push(...votes);
-        })
-      );
-      setUserVotes(allVotes);
+      if (user) {
+        const allVotes: VoteType[] = [];
+        const voteResults = await Promise.allSettled(
+          activeElections.map((election) => getUserVotes(election.id, user.id))
+        );
+        let hasVoteLoadFailure = false;
+        voteResults.forEach((result) => {
+          if (result.status === 'fulfilled') { allVotes.push(...result.value); }
+          else { hasVoteLoadFailure = true; }
+        });
+        if (hasVoteLoadFailure) {
+          showError('Some voting history data could not be loaded. Please try again.');
+        }
+        setUserVotes(allVotes);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load dashboard data';
+      setError(message);
+      showError(message);
+      console.error('VoterDashboard fetchData error:', err);
+    } finally {
+      setIsLoading(false);
     }
-  }, [user]);
+  }, [user, showError]);
 
-  // Fetch data on mount
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void fetchData();
-  }, [fetchData]);
+  useEffect(() => { void fetchData(); }, [fetchData]);
 
-  const handleSelectElection = (election: Election) => {
-    setSelectedElection(election);
-  };
+  const handleSelectElection = (election: Election) => { setSelectedElection(election); };
 
   const handleSelectCandidate = (position: string, candidateId: string) => {
     if (selectedElection) {
-      setVotingState({
-        electionId: selectedElection.id,
-        position,
-        selectedCandidate: candidateId,
-      });
+      setVotingState({ electionId: selectedElection.id, position, selectedCandidate: candidateId });
       setIsConfirmModalOpen(true);
     }
   };
@@ -95,12 +184,9 @@ export default function VoterDashboard() {
   const handleConfirmVote = async () => {
     if (votingState && user) {
       const result = await castVote(
-        votingState.electionId,
-        user.id,
-        votingState.selectedCandidate!,
-        votingState.position
+        votingState.electionId, user.id,
+        votingState.selectedCandidate!, votingState.position
       );
-
       if (result.success) {
         showSuccess('Your vote has been recorded successfully!');
         setIsConfirmModalOpen(false);
@@ -120,114 +206,192 @@ export default function VoterDashboard() {
     window.location.href = '/login';
   };
 
+  const handleViewElectionResults = async (election: Election) => {
+    if (!election.resultsPublic) {
+      showError('Results are not yet published by admin for this election.');
+      return;
+    }
+
+    setIsLoadingResults(true);
+    try {
+      const results = await getElectionResults(election.id);
+      setSelectedElectionResults(results);
+      setSelectedResultElection(election);
+    } catch {
+      showError('Unable to load election results right now.');
+    } finally {
+      setIsLoadingResults(false);
+    }
+  };
+
+  const handleBackToResultsList = () => {
+    setSelectedResultElection(null);
+    setSelectedElectionResults([]);
+  };
+
+  // ── Loading state ─────────────────────────────────────────────────────────
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F7F8FC]">
+        <div className="flex flex-col items-center gap-5">
+          <div className="relative">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#1E3A8A] to-[#2563EB] flex items-center justify-center shadow-lg shadow-blue-200">
+              <Vote className="w-8 h-8 text-white" />
+            </div>
+            <div className="absolute inset-0 rounded-2xl border-2 border-transparent border-t-[#f2c94c] animate-spin" />
+          </div>
+          <div className="text-center">
+            <p className="text-sm font-semibold text-gray-700">Loading Voter Dashboard</p>
+            <p className="text-xs text-gray-400 mt-1">Please wait a moment…</p>
+          </div>
+          <div className="w-40 h-1 bg-gray-100 rounded-full overflow-hidden">
+            <div className="h-full rounded-full bg-gradient-to-r from-[#1E3A8A] to-[#2563EB] animate-pulse" style={{ width: '65%' }} />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Error state ───────────────────────────────────────────────────────────
+  if (error) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#F7F8FC] px-4">
+        <div className="w-full max-w-sm text-center space-y-6">
+          <div className="w-16 h-16 rounded-2xl bg-red-50 flex items-center justify-center mx-auto">
+            <AlertCircle className="w-8 h-8 text-red-400" />
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-2xl font-extrabold text-gray-900 tracking-tight">Loading Error</h2>
+            <p className="text-sm text-gray-500 leading-relaxed">{error}</p>
+          </div>
+          <div className="h-px bg-gray-100" />
+          <div className="flex flex-col sm:flex-row gap-2 justify-center">
+            <ActionBtn onClick={() => void fetchData()} color="blue">Retry</ActionBtn>
+            <ActionBtn onClick={handleLogout} color="outline">Logout</ActionBtn>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Main render ───────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-[#F8FAFC] overflow-x-hidden">
+    <div className="min-h-screen bg-[#F7F8FC] overflow-x-hidden">
       <Tabs
         value={activeTab}
-        onValueChange={(value) => {
-          setActiveTab(value);
-          setIsMobileNavOpen(false);
-        }}
+        onValueChange={(value) => { setActiveTab(value); setIsMobileNavOpen(false); }}
         className="min-h-screen"
       >
-        <div className="sticky top-0 z-40 flex items-center justify-between border-b border-[#1E3A8A]/20 bg-white px-4 py-3 md:hidden">
-          <p className="text-sm font-semibold text-[#1E3A8A]">Student Panel</p>
-          <Button
+
+        {/* ── MOBILE TOP BAR ───────────────────────────────────────────── */}
+        <div className="sticky top-0 z-40 flex items-center justify-between bg-white border-b border-gray-100 px-4 py-3 md:hidden shadow-sm">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-[#1E3A8A] flex items-center justify-center">
+              <Vote className="w-4 h-4 text-white" />
+            </div>
+            <span className="text-sm font-bold text-gray-900">Student Portal</span>
+          </div>
+          <button
             type="button"
-            variant="ghost"
-            size="icon"
             onClick={() => setIsMobileNavOpen((prev) => !prev)}
+            className="p-2 rounded-xl text-gray-500 hover:bg-gray-100 transition-colors"
             aria-label={isMobileNavOpen ? 'Close navigation menu' : 'Open navigation menu'}
           >
-            {isMobileNavOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-          </Button>
+            {isMobileNavOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+          </button>
         </div>
 
         {isMobileNavOpen && (
           <button
             type="button"
-            className="fixed inset-0 z-40 bg-black/40 md:hidden"
+            className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm md:hidden"
             aria-label="Close navigation overlay"
             onClick={() => setIsMobileNavOpen(false)}
           />
         )}
 
-        <aside className={`fixed inset-y-0 left-0 z-50 w-[85vw] max-w-[300px] overflow-x-hidden border-r border-[#1E3A8A]/20 bg-white transition-transform duration-200 md:fixed md:top-0 md:h-screen md:w-64 md:max-w-none md:translate-x-0 md:border-b-0 md:flex md:flex-col ${isMobileNavOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-          <div className="px-4 py-5 border-b border-[#1E3A8A]/15">
-            <h2 className="text-lg font-bold text-[#1E3A8A]">Student Panel</h2>
-            <p className="text-xs text-gray-500 mt-1">Navigation</p>
+        {/* ── SIDEBAR ──────────────────────────────────────────────────── */}
+        <aside className={`
+          fixed inset-y-0 left-0 z-50 flex flex-col
+          w-[80vw] max-w-[260px] bg-white border-r border-gray-100 shadow-xl
+          transition-transform duration-200
+          md:w-64 md:max-w-none md:translate-x-0 md:shadow-none
+          ${isMobileNavOpen ? 'translate-x-0' : '-translate-x-full'}
+        `}>
+          {/* Brand */}
+          <div className="px-5 py-5 border-b border-gray-100">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#1E3A8A] to-[#2563EB] flex items-center justify-center shadow-md shadow-blue-200">
+                <Vote className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-gray-900 leading-none">SchoolVote</p>
+                <p className="text-[10px] text-gray-400 mt-0.5 font-medium uppercase tracking-wide">Student Portal</p>
+              </div>
+            </div>
           </div>
 
-          <div className="p-3 overflow-x-hidden overflow-y-auto md:flex-1">
-            <TabsList className="h-auto w-full min-w-0 bg-transparent p-0 flex flex-col items-stretch justify-start gap-2 overflow-x-hidden md:flex-col md:overflow-visible">
-              <TabsTrigger
-                value="overview"
-                className="w-full min-w-0 justify-start gap-2 overflow-hidden whitespace-nowrap [&>svg]:shrink-0 rounded-md border border-transparent px-3 py-2 text-left text-gray-700 data-[state=active]:bg-[#1E3A8A] data-[state=active]:text-white data-[state=active]:border-[#1E3A8A]"
-              >
-                <Info className="w-4 h-4" />
-                Overview
-              </TabsTrigger>
-              <TabsTrigger
-                value="elections"
-                className="w-full min-w-0 justify-start gap-2 overflow-hidden whitespace-nowrap [&>svg]:shrink-0 rounded-md border border-transparent px-3 py-2 text-left text-gray-700 data-[state=active]:bg-[#1E3A8A] data-[state=active]:text-white data-[state=active]:border-[#1E3A8A]"
-              >
-                <Vote className="w-4 h-4" />
-                Active Elections
-              </TabsTrigger>
-              <TabsTrigger
-                value="history"
-                className="w-full min-w-0 justify-start gap-2 overflow-hidden whitespace-nowrap [&>svg]:shrink-0 rounded-md border border-transparent px-3 py-2 text-left text-gray-700 data-[state=active]:bg-[#1E3A8A] data-[state=active]:text-white data-[state=active]:border-[#1E3A8A]"
-              >
-                <Clock className="w-4 h-4" />
-                My Voting History
-              </TabsTrigger>
-              <TabsTrigger
-                value="profile"
-                className="w-full min-w-0 justify-start gap-2 overflow-hidden whitespace-nowrap [&>svg]:shrink-0 rounded-md border border-transparent px-3 py-2 text-left text-gray-700 data-[state=active]:bg-[#1E3A8A] data-[state=active]:text-white data-[state=active]:border-[#1E3A8A]"
-              >
-                <UserIcon className="w-4 h-4" />
-                My Profile
-              </TabsTrigger>
+          {/* Nav */}
+          <nav className="flex-1 overflow-y-auto p-3 space-y-1">
+            <TabsList className="h-auto w-full bg-transparent p-0 flex flex-col items-stretch gap-1">
+              {NAV.map(({ value, label, icon: Icon }) => (
+                <TabsTrigger
+                  key={value}
+                  value={value}
+                  className="
+                    w-full justify-start gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-left
+                    text-gray-600 border border-transparent
+                    hover:bg-gray-50 hover:text-gray-900
+                    data-[state=active]:bg-[#EFF3FF] data-[state=active]:text-[#1E3A8A]
+                    data-[state=active]:border-[#C7D7FD] data-[state=active]:font-semibold
+                    transition-all
+                  "
+                >
+                  <Icon className="w-4 h-4 shrink-0" />
+                  {label}
+                </TabsTrigger>
+              ))}
             </TabsList>
-          </div>
+          </nav>
 
-          <div className="p-3 border-t border-[#1E3A8A]/15">
-            <Button
-              variant="outline"
-              className="w-full justify-start border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800"
-              onClick={() => {
-                setIsLogoutDialogOpen(true);
-              }}
+          {/* Sidebar footer */}
+          <div className="p-3 border-t border-gray-100">
+            <button
+              type="button"
+              onClick={() => setIsLogoutDialogOpen(true)}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
             >
-              <LogOut className="w-4 h-4 mr-2" />
-              Logout
-            </Button>
+              <LogOut className="w-4 h-4 shrink-0" />
+              Sign Out
+            </button>
           </div>
         </aside>
 
-        <main className="min-w-0 md:ml-64">
-          <header className="bg-[#1E3A8A] border-b border-[#162d6b]">
-            <div className="px-4 sm:px-6 lg:px-8 py-4 sm:py-5">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-                <div>
-                  <h1 className="text-xl font-bold text-white sm:text-2xl">Student Voting Portal</h1>
-                  <p className="text-sm text-blue-200 mt-1">
-                    Welcome, {user?.firstName} {user?.lastName}
-                  </p>
-                </div>
-                <Badge className="w-fit bg-white/20 text-white border border-white/30">
-                  <UserIcon className="w-3 h-3 mr-1" />
-                  Student Voter
-                </Badge>
+        {/* ── MAIN CONTENT ─────────────────────────────────────────────── */}
+        <main className="md:ml-64 min-w-0 flex flex-col min-h-screen">
+
+          {/* Page header */}
+          <header className="bg-gradient-to-r from-[#0c1f4a] to-[#1E3A8A] px-5 py-5 sm:px-8">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h1 className="text-xl font-extrabold text-white tracking-tight sm:text-2xl">
+                  {NAV.find(n => n.value === activeTab)?.label ?? 'Student Portal'}
+                </h1>
+                <p className="text-sm text-blue-200/80 mt-0.5">
+                  Welcome, {user?.firstName} {user?.lastName}
+                </p>
               </div>
+              <span className="inline-flex items-center gap-1.5 bg-white/15 border border-white/20 rounded-full px-3 py-1 text-xs font-semibold text-white w-fit">
+                <UserIcon className="w-3 h-3" /> Student Voter
+              </span>
             </div>
           </header>
 
-          <div className="px-4 py-5 sm:px-6 sm:py-8 lg:px-8">
+          {/* Tab panels */}
+          <div className="flex-1 px-5 py-6 sm:px-8 sm:py-8">
             <TabsContent value="overview">
               <VoterOverviewTab elections={elections} userVotes={userVotes} onNavigate={setActiveTab} />
             </TabsContent>
-
             <TabsContent value="elections">
               {selectedElection ? (
                 <VotingInterface
@@ -244,11 +408,19 @@ export default function VoterDashboard() {
                 />
               )}
             </TabsContent>
-
             <TabsContent value="history">
               <VotingHistory userVotes={userVotes} elections={elections} />
             </TabsContent>
-
+            <TabsContent value="results">
+              <VoterResultsTab
+                elections={resultElections}
+                selectedElection={selectedResultElection}
+                results={selectedElectionResults}
+                loading={isLoadingResults}
+                onViewResults={handleViewElectionResults}
+                onBack={handleBackToResultsList}
+              />
+            </TabsContent>
             <TabsContent value="profile">
               <VoterProfile user={user!} />
             </TabsContent>
@@ -256,65 +428,66 @@ export default function VoterDashboard() {
         </main>
       </Tabs>
 
+      {/* ── LOGOUT DIALOG ──────────────────────────────────────────────────── */}
       <Dialog open={isLogoutDialogOpen} onOpenChange={setIsLogoutDialogOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-sm rounded-2xl">
           <DialogHeader>
-            <DialogTitle>Logout Confirmation</DialogTitle>
-            <DialogDescription>
-              Are you sure you want to log out?
+            <DialogTitle className="text-lg font-extrabold tracking-tight">Sign out?</DialogTitle>
+            <DialogDescription className="text-sm text-gray-500">
+              You'll be returned to the login page.
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter className="touch-footer">
-            <Button variant="outline" className="touch-target w-full sm:w-auto" onClick={() => setIsLogoutDialogOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              className="touch-target w-full bg-red-600 text-white hover:bg-red-700 sm:w-auto"
-              onClick={() => {
-                void handleLogout();
-              }}
+          <DialogFooter className="gap-2 mt-2">
+            <button
+              className="flex-1 sm:flex-none px-4 py-2 text-sm font-semibold rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 transition-colors"
+              onClick={() => setIsLogoutDialogOpen(false)}
             >
-              Logout
-            </Button>
+              Cancel
+            </button>
+            <button
+              className="flex-1 sm:flex-none px-4 py-2 text-sm font-semibold rounded-xl bg-red-600 hover:bg-red-700 text-white transition-colors"
+              onClick={() => { void handleLogout(); }}
+            >
+              Sign Out
+            </button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Confirmation Modal */}
+      {/* ── VOTE CONFIRM DIALOG ─────────────────────────────────────────────── */}
       <Dialog open={isConfirmModalOpen} onOpenChange={setIsConfirmModalOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-sm rounded-2xl">
           <DialogHeader>
-            <DialogTitle>Confirm Your Vote</DialogTitle>
-            <DialogDescription>
-              Please review your selection. Once submitted, your vote cannot be changed.
+            <DialogTitle className="text-lg font-extrabold tracking-tight">Confirm Your Vote</DialogTitle>
+            <DialogDescription className="text-sm text-gray-500">
+              Please review your selection before submitting.
             </DialogDescription>
           </DialogHeader>
-          <div className="py-4">
-            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-              <div className="flex items-start gap-3">
-                <AlertCircle className="w-5 h-5 text-yellow-600 mt-0.5" />
-                <div>
-                  <p className="text-sm font-medium text-yellow-800">
-                    Important Notice
-                  </p>
-                  <p className="text-sm text-yellow-700 mt-1">
-                    Voting is final. You cannot change your vote after submission.
-                  </p>
-                </div>
-              </div>
+
+          {/* Warning block */}
+          <div className="flex items-start gap-3 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3.5 my-1">
+            <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold text-amber-800">This action is irreversible</p>
+              <p className="text-xs text-amber-700 mt-0.5 leading-relaxed">
+                Once submitted, your vote cannot be changed or withdrawn.
+              </p>
             </div>
           </div>
-          <DialogFooter className="touch-footer">
-            <Button variant="outline" className="touch-target w-full sm:w-auto" onClick={() => setIsConfirmModalOpen(false)}>
+
+          <DialogFooter className="gap-2 mt-1">
+            <button
+              className="flex-1 sm:flex-none px-4 py-2 text-sm font-semibold rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 transition-colors"
+              onClick={() => setIsConfirmModalOpen(false)}
+            >
               Cancel
-            </Button>
-            <Button
-              className="touch-target w-full rounded-md bg-[#2E7D32] font-medium hover:bg-[#1B5E20] sm:w-auto"
+            </button>
+            <button
+              className="flex-1 sm:flex-none px-4 py-2 text-sm font-semibold rounded-xl bg-[#166534] hover:bg-[#14532d] text-white transition-colors flex items-center justify-center gap-2"
               onClick={handleConfirmVote}
             >
-              <CheckCircle className="w-4 h-4 mr-2" />
-              Confirm Vote
-            </Button>
+              <CheckCircle className="w-4 h-4" /> Confirm Vote
+            </button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -322,37 +495,32 @@ export default function VoterDashboard() {
   );
 }
 
-// ============================================
-// VOTER OVERVIEW TAB
-// ============================================
+// ═══════════════════════════════════════════════════════════════════════════════
+// VOTER OVERVIEW TAB (logic unchanged)
+// ═══════════════════════════════════════════════════════════════════════════════
 function VoterOverviewTab({
-  elections,
-  userVotes,
-  onNavigate,
-}: {
-  elections: Election[];
-  userVotes: VoteType[];
-  onNavigate: (tab: string) => void;
-}) {
-  const totalOpen = elections.length;
-  const votedElectionIds = new Set(userVotes.map(v => v.electionId));
-  const votedCount = elections.filter(e => votedElectionIds.has(e.id)).length;
-  const pendingCount = totalOpen - votedCount;
+  elections, userVotes, onNavigate,
+}: { elections: Election[]; userVotes: VoteType[]; onNavigate: (tab: string) => void }) {
+
+  const totalOpen         = elections.length;
+  const votedElectionIds  = new Set(userVotes.map(v => v.electionId));
+  const votedCount        = elections.filter(e => votedElectionIds.has(e.id)).length;
+  const pendingCount      = totalOpen - votedCount;
 
   const statCards = [
-    { label: 'Open Elections', value: totalOpen, colorClass: 'bg-blue-100 text-blue-600' },
-    { label: 'Votes Submitted', value: votedCount, colorClass: 'bg-green-100 text-green-600' },
-    { label: 'Still to Vote In', value: pendingCount, colorClass: pendingCount > 0 ? 'bg-amber-100 text-amber-600' : 'bg-gray-100 text-gray-500' },
+    { label: 'Open Elections',   value: totalOpen,    accent: 'bg-blue-50 text-blue-600',   icon: Vote },
+    { label: 'Votes Submitted',  value: votedCount,   accent: 'bg-green-50 text-green-600', icon: CheckCircle },
+    { label: 'Still to Vote In', value: pendingCount, accent: pendingCount > 0 ? 'bg-amber-50 text-amber-600' : 'bg-gray-50 text-gray-400', icon: Clock },
   ];
 
   return (
     <div className="space-y-6">
-      {/* Alert if pending votes */}
+      {/* Pending vote alert */}
       {pendingCount > 0 && (
-        <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4">
-          <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4">
+          <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
           <div>
-            <p className="text-sm font-semibold text-amber-800">Your vote matters!</p>
+            <p className="text-sm font-extrabold text-amber-800">Your vote matters!</p>
             <p className="text-sm text-amber-700 mt-0.5">
               You have {pendingCount} open election{pendingCount > 1 ? 's' : ''} waiting for your vote.
             </p>
@@ -360,36 +528,42 @@ function VoterOverviewTab({
         </div>
       )}
 
-      {/* Stat Cards */}
+      {/* Stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {statCards.map((card, i) => (
-          <div key={i} className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
-            <p className="text-sm font-medium text-gray-500">{card.label}</p>
-            <p className="text-3xl font-bold text-gray-900 mt-1">{card.value}</p>
-            <div className={`mt-2 inline-block px-2 py-0.5 rounded text-xs font-medium ${card.colorClass}`}>
-              elections
+          <div key={i} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 hover:shadow-md transition-shadow">
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1">{card.label}</p>
+                <p className="text-3xl font-extrabold text-gray-900 tracking-tight">{card.value}</p>
+              </div>
+              <div className={`w-11 h-11 rounded-xl flex items-center justify-center ${card.accent}`}>
+                <card.icon className="w-5 h-5" />
+              </div>
             </div>
           </div>
         ))}
       </div>
 
-      {/* My Voting Status per election */}
-      <div className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
-        <h3 className="text-base font-semibold text-[#1E3A8A] mb-4">My Voting Status</h3>
+      {/* Voting status per election */}
+      <SectionCard>
+        <CardHeading eyebrow="Status" title="My Voting Status" />
         {elections.length > 0 ? (
-          <ul className="divide-y divide-gray-100">
+          <ul className="divide-y divide-gray-50">
             {elections.map((election) => {
               const hasVoted = votedElectionIds.has(election.id);
               return (
                 <li key={election.id} className="py-3 flex items-center justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-800 truncate">{election.title}</p>
-                    <p className="text-xs text-gray-400">Ends {formatDate(election.endDate)}</p>
+                    <p className="text-sm font-semibold text-gray-800 truncate">{election.title}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">Ends {formatDate(election.endDate)}</p>
                   </div>
-                  <span className={`shrink-0 px-2.5 py-1 rounded-full text-xs font-semibold ${
-                    hasVoted ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-700'
+                  <span className={`shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${
+                    hasVoted
+                      ? 'bg-green-50 text-green-700 border border-green-200'
+                      : 'bg-amber-50 text-amber-700 border border-amber-200'
                   }`}>
-                    {hasVoted ? 'Voted' : 'Not voted yet'}
+                    {hasVoted ? <><CheckCircle className="w-3 h-3" /> Voted</> : <><Clock className="w-3 h-3" /> Pending</>}
                   </span>
                 </li>
               );
@@ -398,110 +572,256 @@ function VoterOverviewTab({
         ) : (
           <p className="text-sm text-gray-400">No active elections at this time.</p>
         )}
+      </SectionCard>
+
+      {/* Quick actions */}
+      <SectionCard>
+        <CardHeading eyebrow="Shortcuts" title="Quick Actions" />
+        <div className="flex flex-wrap gap-3">
+          <ActionBtn onClick={() => onNavigate('elections')} color="blue">
+            <Vote className="w-4 h-4" /> Browse Elections
+          </ActionBtn>
+          <ActionBtn onClick={() => onNavigate('history')} color="outline">
+            <Clock className="w-4 h-4" /> My Voting History
+          </ActionBtn>
+          <ActionBtn onClick={() => onNavigate('results')} color="outline">
+            <TrendingUp className="w-4 h-4" /> View Published Results
+          </ActionBtn>
+        </div>
+      </SectionCard>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RESULTS TAB
+// ═══════════════════════════════════════════════════════════════════════════════
+function VoterResultsTab({
+  elections, selectedElection, results, loading, onViewResults, onBack,
+}: {
+  elections: Election[];
+  selectedElection: Election | null;
+  results: ElectionResult[];
+  loading: boolean;
+  onViewResults: (election: Election) => void;
+  onBack: () => void;
+}) {
+  if (selectedElection) {
+    return (
+      <ElectionResultsView
+        election={selectedElection}
+        results={results}
+        loading={loading}
+        onBack={onBack}
+      />
+    );
+  }
+
+  if (elections.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-center">
+        <div className="w-16 h-16 rounded-2xl bg-gray-50 flex items-center justify-center mb-5">
+          <TrendingUp className="w-8 h-8 text-gray-300" />
+        </div>
+        <h3 className="text-lg font-extrabold text-gray-700 tracking-tight">No Published Results Yet</h3>
+        <p className="text-sm text-gray-400 mt-1 max-w-xs">Election results will appear here after admin publishes them.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Published</p>
+        <h2 className="text-xl font-extrabold text-gray-900 tracking-tight">Election Results</h2>
       </div>
 
-      {/* Quick Actions */}
-      <div className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
-        <h3 className="text-base font-semibold text-[#1E3A8A] mb-4">Quick Actions</h3>
-        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-          <Button
-            className="touch-target w-full rounded-md bg-[#1E3A8A] font-medium hover:bg-[#162d6b] sm:w-auto"
-            onClick={() => onNavigate('elections')}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+        {elections.map((election) => (
+          <div
+            key={election.id}
+            className="group text-left bg-white rounded-2xl border border-gray-100 shadow-sm p-5 hover:shadow-lg hover:border-blue-100 hover:-translate-y-1 transition-all duration-200"
           >
-            <Vote className="w-4 h-4 mr-2" />
-            Browse Elections
-          </Button>
-          <Button variant="outline" className="touch-target w-full sm:w-auto" onClick={() => onNavigate('history')}>
-            <Clock className="w-4 h-4 mr-2" />
-            My Voting History
-          </Button>
-        </div>
+            <div className="flex items-start justify-between mb-4">
+              <div className="w-10 h-10 rounded-xl bg-[#EFF3FF] flex items-center justify-center">
+                <TrendingUp className="w-5 h-5 text-[#1E3A8A]" />
+              </div>
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-green-50 text-green-700 border border-green-200">
+                Published
+              </span>
+            </div>
+
+            <h3 className="text-base font-extrabold text-gray-900 tracking-tight mb-1 group-hover:text-[#1E3A8A] transition-colors">
+              {election.title}
+            </h3>
+            <p className="text-xs font-semibold text-[#2563EB] mb-2">{formatElectionType(election.type)}</p>
+            <p className="text-sm text-gray-500 line-clamp-2 mb-4">{election.description}</p>
+
+            <div className="flex items-center gap-1.5 text-xs text-gray-400 mb-4">
+              <Calendar className="w-3.5 h-3.5" />
+              Ended {formatDate(election.endDate)}
+            </div>
+
+            <ActionBtn color="blue" fullWidth onClick={() => onViewResults(election)}>
+              <TrendingUp className="w-4 h-4" /> View Results
+            </ActionBtn>
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
-// ============================================
-// ELECTIONS LIST
-// ============================================
-function ElectionsList({
-  elections,
-  userVotes,
-  onSelectElection,
+function ElectionResultsView({
+  election, results, loading, onBack,
 }: {
-  elections: Election[];
-  userVotes: VoteType[];
-  onSelectElection: (election: Election) => void;
+  election: Election;
+  results: ElectionResult[];
+  loading: boolean;
+  onBack: () => void;
 }) {
-  if (elections.length === 0) {
+  if (loading) {
     return (
-      <div className="text-center py-12">
-        <Vote className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-        <h3 className="text-lg font-medium text-gray-900">No Active Elections</h3>
-        <p className="text-gray-500 mt-2">There are no active elections at this time.</p>
+      <div className="flex items-center gap-2 text-sm text-gray-500 py-8">
+        <div className="w-4 h-4 border-2 border-[#1E3A8A] border-t-transparent rounded-full animate-spin" />
+        Loading results…
+      </div>
+    );
+  }
+
+  if (results.length === 0) {
+    return (
+      <div className="space-y-4">
+        <button onClick={onBack} className="flex items-center gap-1.5 text-xs font-semibold text-gray-400 hover:text-gray-700 transition-colors">
+          ← Back to Results
+        </button>
+        <p className="text-sm text-gray-500">No result records are available yet for this election.</p>
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div>
+        <button onClick={onBack} className="flex items-center gap-1.5 text-xs font-semibold text-gray-400 hover:text-gray-700 transition-colors mb-3">
+          ← Back to Results
+        </button>
+        <h2 className="text-2xl font-extrabold text-gray-900 tracking-tight">{election.title}</h2>
+        <p className="text-sm text-gray-500 mt-1">Election Type: {formatElectionType(election.type)}</p>
+      </div>
+
+      <div className="space-y-5">
+        {results.map((positionResult) => (
+          <SectionCard key={positionResult.position}>
+            <CardHeading
+              eyebrow="Position"
+              title={`${positionResult.position} (${positionResult.totalVotes} total votes)`}
+            />
+
+            <DataTable headers={['Rank', 'Candidate', 'Votes', 'Percentage']} empty={positionResult.candidates.length === 0}>
+              {positionResult.candidates.map((candidate, index) => (
+                <tr key={candidate.candidateId} className="hover:bg-gray-50/70 transition-colors">
+                  <td className="px-5 py-3.5 whitespace-nowrap text-sm font-semibold text-gray-900">#{index + 1}</td>
+                  <td className="px-5 py-3.5 whitespace-nowrap">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-[#1E3A8A] overflow-hidden flex items-center justify-center text-white text-xs font-bold shrink-0">
+                        {(candidate.photoPath || candidate.photoUrl) ? (
+                          <img
+                            src={candidate.photoPath || candidate.photoUrl}
+                            alt={candidate.displayName}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : candidate.displayName.charAt(0).toUpperCase()}
+                      </div>
+                      <p className="text-sm font-semibold text-gray-900">{candidate.displayName}</p>
+                    </div>
+                  </td>
+                  <td className="px-5 py-3.5 whitespace-nowrap text-sm text-gray-600">{candidate.voteCount}</td>
+                  <td className="px-5 py-3.5 whitespace-nowrap text-sm text-gray-600">{candidate.percentage.toFixed(1)}%</td>
+                </tr>
+              ))}
+            </DataTable>
+          </SectionCard>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ELECTIONS LIST (logic unchanged)
+// ═══════════════════════════════════════════════════════════════════════════════
+function ElectionsList({
+  elections, userVotes, onSelectElection,
+}: { elections: Election[]; userVotes: VoteType[]; onSelectElection: (election: Election) => void }) {
+
+  if (elections.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-center">
+        <div className="w-16 h-16 rounded-2xl bg-gray-50 flex items-center justify-center mb-5">
+          <Vote className="w-8 h-8 text-gray-300" />
+        </div>
+        <h3 className="text-lg font-extrabold text-gray-700 tracking-tight">No Active Elections</h3>
+        <p className="text-sm text-gray-400 mt-1 max-w-xs">There are no active elections at this time. Check back later.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Elections</p>
+        <h2 className="text-xl font-extrabold text-gray-900 tracking-tight">Active Elections</h2>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {elections.map((election) => {
-          const electionVotes = userVotes.filter(v => v.electionId === election.id);
-          const hasVotedInElection = electionVotes.length > 0;
+          const electionVotes       = userVotes.filter(v => v.electionId === election.id);
+          const hasVotedInElection  = electionVotes.length > 0;
 
           return (
-            <Card
+            <button
               key={election.id}
-              className="cursor-pointer hover:shadow-md transition-shadow"
+              type="button"
               onClick={() => onSelectElection(election)}
+              className="group text-left bg-white rounded-2xl border border-gray-100 shadow-sm p-5
+                         hover:shadow-lg hover:border-blue-100 hover:-translate-y-1 transition-all duration-200"
             >
-              <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div>
-                    <CardTitle className="text-lg">{election.title}</CardTitle>
-                    <CardDescription className="mt-1">
-                      {formatElectionType(election.type)}
-                    </CardDescription>
-                  </div>
-                  <Badge
-                    className={
-                      hasVotedInElection
-                        ? 'bg-green-100 text-green-800'
-                        : 'bg-blue-100 text-blue-800'
-                    }
-                  >
-                    {hasVotedInElection ? (
-                      <>
-                        <CheckCircle className="w-3 h-3 mr-1" />
-                        Voted
-                      </>
-                    ) : (
-                      <>
-                        <Clock className="w-3 h-3 mr-1" />
-                        Open
-                      </>
-                    )}
-                  </Badge>
+              {/* Status badge */}
+              <div className="flex items-start justify-between mb-4">
+                <div className="w-10 h-10 rounded-xl bg-[#EFF3FF] flex items-center justify-center">
+                  <Vote className="w-5 h-5 text-[#1E3A8A]" />
                 </div>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-gray-600 line-clamp-2 mb-4">
-                  {election.description}
-                </p>
-                <div className="flex items-center text-sm text-gray-500">
-                  <Calendar className="w-4 h-4 mr-2" />
-                  Ends {formatDate(election.endDate)}
+                <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${
+                  hasVotedInElection
+                    ? 'bg-green-50 text-green-700 border border-green-200'
+                    : 'bg-blue-50 text-blue-700 border border-blue-200'
+                }`}>
+                  {hasVotedInElection
+                    ? <><CheckCircle className="w-3 h-3" /> Voted</>
+                    : <><Clock className="w-3 h-3" /> Open</>}
+                </span>
+              </div>
+
+              <h3 className="text-base font-extrabold text-gray-900 tracking-tight mb-1 group-hover:text-[#1E3A8A] transition-colors">
+                {election.title}
+              </h3>
+              <p className="text-xs font-semibold text-[#2563EB] mb-2">{formatElectionType(election.type)}</p>
+              <p className="text-sm text-gray-500 line-clamp-2 mb-4">{election.description}</p>
+
+              <div className="flex items-center gap-1.5 text-xs text-gray-400">
+                <Calendar className="w-3.5 h-3.5" />
+                Ends {formatDate(election.endDate)}
+              </div>
+
+              {hasVotedInElection && (
+                <div className="mt-3 pt-3 border-t border-gray-50">
+                  <p className="text-xs font-semibold text-green-600 flex items-center gap-1">
+                    <CheckCircle className="w-3.5 h-3.5" /> You have voted in this election
+                  </p>
                 </div>
-                {hasVotedInElection && (
-                  <div className="mt-3 pt-3 border-t border-gray-100">
-                    <p className="text-sm text-green-600 font-medium">
-                      You have voted in this election
-                    </p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+              )}
+            </button>
           );
         })}
       </div>
@@ -509,21 +829,17 @@ function ElectionsList({
   );
 }
 
-// ============================================
-// VOTING INTERFACE
-// ============================================
+// ═══════════════════════════════════════════════════════════════════════════════
+// VOTING INTERFACE (logic unchanged)
+// ═══════════════════════════════════════════════════════════════════════════════
 function VotingInterface({
-  election,
-  onBack,
-  onSelectCandidate,
-  getVotesForPosition,
+  election, onBack, onSelectCandidate, getVotesForPosition,
 }: {
-  election: Election;
-  onBack: () => void;
+  election: Election; onBack: () => void;
   onSelectCandidate: (position: string, candidateId: string) => void;
   getVotesForPosition: (electionId: string, position: string) => VoteType[];
 }) {
-  const [positions, setPositions] = useState<ElectionPosition[]>([]);
+  const [positions, setPositions]                 = useState<ElectionPosition[]>([]);
   const [candidatesByPosition, setCandidatesByPosition] = useState<Record<string, Candidate[]>>({});
 
   useEffect(() => {
@@ -547,68 +863,71 @@ function VotingInterface({
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+      {/* Back + heading */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <Button variant="outline" size="sm" onClick={onBack} className="mb-2">
+          <button
+            type="button"
+            onClick={onBack}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-400 hover:text-gray-700 transition-colors mb-3"
+          >
             ← Back to Elections
-          </Button>
-          <h2 className="text-2xl font-bold text-gray-900">{election.title}</h2>
-          <p className="text-gray-500 mt-1">{election.description}</p>
+          </button>
+          <h2 className="text-2xl font-extrabold text-gray-900 tracking-tight">{election.title}</h2>
+          <p className="text-sm text-gray-500 mt-1">{election.description}</p>
         </div>
-        <div className="text-right">
-          <Badge variant="outline" className="mb-2">
-            <Clock className="w-3 h-3 mr-1" />
-            Ends {formatDateTime(election.endDate)}
-          </Badge>
-        </div>
+        <span className="inline-flex items-center gap-1.5 bg-white border border-gray-200 rounded-full px-3 py-1.5 text-xs font-semibold text-gray-600 w-fit shrink-0">
+          <Clock className="w-3 h-3" /> Ends {formatDateTime(election.endDate)}
+        </span>
       </div>
 
       {/* Positions */}
-      <div className="space-y-8">
+      <div className="space-y-6">
         {positions.map((position) => {
-          const positionName = position.name;
-          const candidates = candidatesByPosition[positionName] || [];
-          const votesForPosition = getVotesForPosition(election.id, positionName);
-          const maxVotes = position.voteLimit;
+          const positionName      = position.name;
+          const candidates        = candidatesByPosition[positionName] || [];
+          const votesForPosition  = getVotesForPosition(election.id, positionName);
+          const maxVotes          = position.voteLimit;
           const votedCandidateIds = new Set(votesForPosition.map((vote) => vote.candidateId));
-          const votesRemaining = Math.max(0, maxVotes - votesForPosition.length);
-          const hasReachedLimit = votesRemaining === 0;
+          const votesRemaining    = Math.max(0, maxVotes - votesForPosition.length);
+          const hasReachedLimit   = votesRemaining === 0;
 
           return (
-            <div key={position.id} className="bg-white rounded-lg shadow border border-gray-200 p-6">
+            <div key={position.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+              {/* Position header */}
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-[#1E3A8A]">{positionName}</h3>
-                <Badge className={hasReachedLimit ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'}>
+                <h3 className="text-base font-extrabold text-gray-900">{positionName}</h3>
+                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+                  hasReachedLimit
+                    ? 'bg-green-50 text-green-700 border border-green-200'
+                    : 'bg-blue-50 text-blue-700 border border-blue-200'
+                }`}>
                   {votesForPosition.length}/{maxVotes} votes used
-                </Badge>
+                </span>
               </div>
 
+              {/* Vote limit feedback */}
               {hasReachedLimit ? (
-                <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
-                  <div className="flex items-center gap-3">
-                    <CheckCircle className="w-6 h-6 text-green-600" />
-                    <div>
-                      <p className="font-medium text-green-800">
-                        You reached the maximum votes for this position
-                      </p>
-                      <p className="text-sm text-green-600">
-                        Limit: {maxVotes} candidate{maxVotes > 1 ? 's' : ''}.
-                      </p>
-                    </div>
+                <div className="flex items-start gap-3 rounded-xl bg-green-50 border border-green-200 px-4 py-3 mb-5">
+                  <CheckCircle className="w-5 h-5 text-green-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-semibold text-green-800">Maximum votes reached for this position</p>
+                    <p className="text-xs text-green-600 mt-0.5">Limit: {maxVotes} candidate{maxVotes > 1 ? 's' : ''}.</p>
                   </div>
                 </div>
-              ) : null}
-
-              {!hasReachedLimit && (
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
-                  <p className="text-sm text-blue-800">
-                    You can still vote for <span className="font-semibold">{votesRemaining}</span> candidate{votesRemaining > 1 ? 's' : ''} in this position.
+              ) : (
+                <div className="flex items-center gap-2 rounded-xl bg-blue-50 border border-blue-100 px-4 py-2.5 mb-5">
+                  <Info className="w-4 h-4 text-blue-500 shrink-0" />
+                  <p className="text-sm text-blue-700">
+                    You can still vote for{' '}
+                    <span className="font-extrabold">{votesRemaining}</span>{' '}
+                    candidate{votesRemaining > 1 ? 's' : ''} in this position.
                   </p>
                 </div>
               )}
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {/* Candidate grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {candidates.map((candidate) => (
                   <CandidateCard
                     key={candidate.id}
@@ -627,25 +946,22 @@ function VotingInterface({
   );
 }
 
-// ============================================
-// CANDIDATE CARD
-// ============================================
+// ═══════════════════════════════════════════════════════════════════════════════
+// CANDIDATE CARD (logic unchanged)
+// ═══════════════════════════════════════════════════════════════════════════════
 function CandidateCard({
-  candidate,
-  isVoted,
-  disabled,
-  onSelect,
-}: {
-  candidate: Candidate;
-  isVoted: boolean;
-  disabled?: boolean;
-  onSelect: () => void;
-}) {
+  candidate, isVoted, disabled, onSelect,
+}: { candidate: Candidate; isVoted: boolean; disabled?: boolean; onSelect: () => void }) {
   const [showDetails, setShowDetails] = useState(false);
-  const [imageError, setImageError] = useState(false);
+  const [imageError, setImageError]   = useState(false);
 
   return (
-    <div className={`border border-gray-200 rounded-lg overflow-hidden transition-shadow ${disabled ? 'opacity-75' : 'hover:shadow-md'}`}>
+    <div className={`
+      bg-white rounded-2xl border overflow-hidden transition-all duration-200
+      ${isVoted ? 'border-green-200 ring-1 ring-green-200' : 'border-gray-100'}
+      ${!disabled ? 'hover:shadow-md hover:-translate-y-0.5' : 'opacity-75'}
+    `}>
+      {/* Photo */}
       <div className="aspect-square bg-gray-100 relative">
         {(candidate.photoPath || candidate.photoUrl) && !imageError ? (
           <img
@@ -655,42 +971,69 @@ function CandidateCard({
             onError={() => setImageError(true)}
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center bg-[#1E3A8A]">
-            <span className="text-4xl font-bold text-white">
+          <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-[#1E3A8A] to-[#2563EB]">
+            <span className="text-4xl font-extrabold text-white">
               {candidate.displayName.charAt(0)}
             </span>
           </div>
         )}
-      </div>
-      <div className="p-4">
-        <h4 className="font-semibold text-gray-900">{candidate.displayName}</h4>
-        {candidate.bio && (
-          <p className="text-sm text-gray-500 mt-1 line-clamp-2">{candidate.bio}</p>
+
+        {/* Voted overlay badge */}
+        {isVoted && (
+          <div className="absolute top-2 right-2 bg-green-500 text-white rounded-full p-1 shadow-md">
+            <CheckCircle className="w-4 h-4" />
+          </div>
         )}
-        <div className="mt-3 space-y-2">
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full"
-            onClick={() => setShowDetails(!showDetails)}
-          >
-            <Info className="w-4 h-4 mr-2" />
-            {showDetails ? 'Hide Details' : 'View Platform'}
-          </Button>
-          <Button
-            className="w-full bg-[#2E7D32] hover:bg-[#1B5E20] rounded-md font-medium"
+      </div>
+
+      {/* Info */}
+      <div className="p-4 space-y-3">
+        <div>
+          <h4 className="text-sm font-extrabold text-gray-900">{candidate.displayName}</h4>
+          {candidate.bio && (
+            <p className="text-xs text-gray-500 mt-1 line-clamp-2 leading-relaxed">{candidate.bio}</p>
+          )}
+        </div>
+
+        <div className="space-y-2">
+          {candidate.platform && (
+            <button
+              type="button"
+              onClick={() => setShowDetails(!showDetails)}
+              className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
+            >
+              <Info className="w-3.5 h-3.5" />
+              {showDetails ? 'Hide Platform' : 'View Platform'}
+            </button>
+          )}
+
+          <button
+            type="button"
             onClick={onSelect}
             disabled={disabled}
+            className={`
+              w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold rounded-xl
+              transition-all duration-150
+              ${isVoted
+                ? 'bg-green-50 text-green-700 border border-green-200 cursor-default'
+                : disabled
+                ? 'bg-gray-50 text-gray-400 border border-gray-200 cursor-not-allowed'
+                : 'bg-[#166534] hover:bg-[#14532d] text-white shadow-sm shadow-green-200 hover:-translate-y-px active:translate-y-0'
+              }
+            `}
           >
-            <Vote className="w-4 h-4 mr-2" />
-            {isVoted ? 'Already Voted' : disabled ? 'Unavailable' : 'Vote'}
-          </Button>
+            {isVoted
+              ? <><CheckCircle className="w-3.5 h-3.5" /> Already Voted</>
+              : disabled
+              ? 'Unavailable'
+              : <><Vote className="w-3.5 h-3.5" /> Vote</>}
+          </button>
         </div>
+
         {showDetails && candidate.platform && (
-          <div className="mt-3 pt-3 border-t border-gray-100">
-            <p className="text-sm text-gray-600 whitespace-pre-line">
-              {candidate.platform}
-            </p>
+          <div className="pt-3 border-t border-gray-50">
+            <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Platform</p>
+            <p className="text-xs text-gray-600 whitespace-pre-line leading-relaxed">{candidate.platform}</p>
           </div>
         )}
       </div>
@@ -698,182 +1041,140 @@ function CandidateCard({
   );
 }
 
-// ============================================
-// VOTING HISTORY
-// ============================================
+// ═══════════════════════════════════════════════════════════════════════════════
+// VOTING HISTORY (logic unchanged)
+// ═══════════════════════════════════════════════════════════════════════════════
 function VotingHistory({
-  userVotes,
-  elections,
-}: {
-  userVotes: VoteType[];
-  elections: Election[];
-}) {
+  userVotes, elections,
+}: { userVotes: VoteType[]; elections: Election[] }) {
+
   if (userVotes.length === 0) {
     return (
-      <div className="text-center py-12">
-        <CheckCircle className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-        <h3 className="text-lg font-medium text-gray-900">No Voting History</h3>
-        <p className="text-gray-500 mt-2">You haven't cast any votes yet.</p>
+      <div className="flex flex-col items-center justify-center py-20 text-center">
+        <div className="w-16 h-16 rounded-2xl bg-gray-50 flex items-center justify-center mb-5">
+          <CheckCircle className="w-8 h-8 text-gray-300" />
+        </div>
+        <h3 className="text-lg font-extrabold text-gray-700 tracking-tight">No Voting History</h3>
+        <p className="text-sm text-gray-400 mt-1">You haven't cast any votes yet.</p>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <h3 className="text-lg font-semibold text-[#1E3A8A]">Your Voting History</h3>
-      <div className="bg-white rounded-lg shadow border border-gray-200 overflow-x-auto">
-        <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-[#1E3A8A]">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-semibold text-white uppercase tracking-wider">
-                Election
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-semibold text-white uppercase tracking-wider">
-                Position
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-semibold text-white uppercase tracking-wider">
-                Voted At
-              </th>
-              <th className="px-6 py-3 text-left text-xs font-semibold text-white uppercase tracking-wider">
-                Status
-              </th>
-            </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {userVotes.map((vote) => {
-              const election = elections.find(e => e.id === vote.electionId);
-              return (
-                <tr key={vote.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                    {election?.title || 'Unknown Election'}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {vote.position}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {formatDateTime(vote.votedAt)}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <Badge className="bg-green-100 text-green-800">
-                      <CheckCircle className="w-3 h-3 mr-1" />
-                      Recorded
-                    </Badge>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+    <div className="space-y-5">
+      <div>
+        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">History</p>
+        <h2 className="text-xl font-extrabold text-gray-900 tracking-tight">Your Voting History</h2>
       </div>
+
+      <DataTable headers={['Election', 'Position', 'Voted At', 'Status']} empty={false}>
+        {userVotes.map((vote) => {
+          const election = elections.find(e => e.id === vote.electionId);
+          return (
+            <tr key={vote.id} className="hover:bg-gray-50/70 transition-colors">
+              <td className="px-5 py-3.5 whitespace-nowrap text-sm font-semibold text-gray-900">
+                {election?.title || 'Unknown Election'}
+              </td>
+              <td className="px-5 py-3.5 whitespace-nowrap text-sm text-gray-500">
+                {vote.position}
+              </td>
+              <td className="px-5 py-3.5 whitespace-nowrap text-xs text-gray-500">
+                {formatDateTime(vote.votedAt)}
+              </td>
+              <td className="px-5 py-3.5 whitespace-nowrap">
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-green-50 text-green-700 border border-green-200">
+                  <CheckCircle className="w-3 h-3" /> Recorded
+                </span>
+              </td>
+            </tr>
+          );
+        })}
+      </DataTable>
     </div>
   );
 }
 
-// ============================================
-// VOTER PROFILE
-// ============================================
+// ═══════════════════════════════════════════════════════════════════════════════
+// VOTER PROFILE (logic unchanged)
+// ═══════════════════════════════════════════════════════════════════════════════
 function VoterProfile({ user }: { user: User }) {
-  const { profile, isLoading } = useSupabaseProfile();
+  const { profile, isLoading: profileLoading } = useSupabaseProfile();
 
-  const displayName = profile?.name || `${user.firstName} ${user.lastName}`.trim() || 'User';
-  const displayEmail = profile?.email || user.email || 'No email available';
-  const displayAvatar = profile?.avatarUrl || user.photoUrl || user.photoPath || DEFAULT_PROFILE_AVATAR;
-  const initials = displayName
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() || '')
-    .join('') || 'U';
+  const displayName   = profile?.name || `${user.firstName} ${user.lastName}`.trim() || 'User';
+  const displayEmail  = profile?.email || user.email || 'No email available';
+  const displayAvatar = user.photoUrl || user.photoPath || profile?.avatarUrl || DEFAULT_PROFILE_AVATAR;
+  const initials      = displayName.split(/\s+/).filter(Boolean).slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() || '').join('') || 'U';
+
+  const profileFields = [
+    { label: 'First Name',    value: profile ? displayName.split(/\s+/)[0] || 'User' : user.firstName || 'User' },
+    { label: 'Last Name',     value: profile ? displayName.split(/\s+/).slice(1).join(' ') || 'N/A' : user.lastName || 'N/A' },
+    { label: 'Email',         value: displayEmail },
+    { label: 'Initials',      value: initials },
+    { label: 'Student ID',    value: user.studentId || 'N/A' },
+    { label: 'Member Since',  value: formatDate(user.createdAt) },
+  ];
 
   return (
-    <div className="max-w-2xl">
-      <Card>
-        <CardHeader>
-          <CardTitle>My Profile</CardTitle>
-          <CardDescription>Your account information</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          {isLoading ? (
-            <div className="flex items-center gap-4" aria-busy="true" aria-live="polite">
-              <div className="w-20 h-20 rounded-full bg-gray-200 animate-pulse" />
-              <div className="space-y-2">
-                <div className="h-5 w-40 bg-gray-200 rounded animate-pulse" />
-                <div className="h-4 w-52 bg-gray-200 rounded animate-pulse" />
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-center gap-4">
-              <div className="w-20 h-20 rounded-full bg-[#1E3A8A] overflow-hidden flex items-center justify-center text-white text-2xl font-bold">
-                <img
-                  src={displayAvatar}
-                  alt="Profile"
-                  className="w-full h-full object-cover"
-                  onError={(e) => {
-                    e.currentTarget.src = DEFAULT_PROFILE_AVATAR;
-                  }}
-                />
-              </div>
-              <div>
-                <h3 className="text-xl font-semibold text-gray-900">{displayName}</h3>
-                <p className="text-gray-500">{displayEmail}</p>
-                {user.studentId && (
-                  <p className="text-sm text-gray-400">Student ID: {user.studentId}</p>
-                )}
-                {!profile && <p className="text-xs text-gray-400 mt-1">Using local account fallback profile.</p>}
-              </div>
-            </div>
-          )}
+    <div className="max-w-2xl space-y-5">
+      <div>
+        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">Account</p>
+        <h2 className="text-xl font-extrabold text-gray-900 tracking-tight">My Profile</h2>
+      </div>
 
-          <Separator />
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div>
-              <ProfileLabel>First Name</ProfileLabel>
-              <p className="text-sm text-gray-900 mt-1">{profile ? displayName.split(/\s+/)[0] || 'User' : user.firstName || 'User'}</p>
-            </div>
-            <div>
-              <ProfileLabel>Last Name</ProfileLabel>
-              <p className="text-sm text-gray-900 mt-1">{profile ? displayName.split(/\s+/).slice(1).join(' ') || 'N/A' : user.lastName || 'N/A'}</p>
-            </div>
-            <div>
-              <ProfileLabel>Email</ProfileLabel>
-              <p className="text-sm text-gray-900 mt-1">{displayEmail}</p>
-            </div>
-            <div>
-              <ProfileLabel>Display Initials</ProfileLabel>
-              <p className="text-sm text-gray-900 mt-1">{initials}</p>
-            </div>
-            <div>
-              <ProfileLabel>Student ID</ProfileLabel>
-              <p className="text-sm text-gray-900 mt-1">{user.studentId || 'N/A'}</p>
-            </div>
-            <div>
-              <ProfileLabel>Account Status</ProfileLabel>
-              <Badge
-                className={
-                  user.isActive
-                    ? 'bg-green-100 text-green-800 mt-1'
-                    : 'bg-red-100 text-red-800 mt-1'
-                }
-              >
-                {user.isActive ? 'Active' : 'Inactive'}
-              </Badge>
-            </div>
-            <div>
-              <ProfileLabel>Member Since</ProfileLabel>
-              <p className="text-sm text-gray-900 mt-1">{formatDate(user.createdAt)}</p>
+      <SectionCard>
+        {/* Avatar + name */}
+        {profileLoading ? (
+          <div className="flex items-center gap-4 mb-6">
+            <div className="w-20 h-20 rounded-2xl bg-gray-100 animate-pulse shrink-0" />
+            <div className="space-y-2">
+              <div className="h-5 w-40 bg-gray-100 rounded-xl animate-pulse" />
+              <div className="h-4 w-52 bg-gray-100 rounded-xl animate-pulse" />
             </div>
           </div>
-        </CardContent>
-      </Card>
+        ) : (
+          <div className="flex items-center gap-4 mb-6">
+            <div className="w-20 h-20 rounded-2xl bg-[#1E3A8A] overflow-hidden flex items-center justify-center text-white text-2xl font-extrabold shrink-0">
+              <img
+                src={displayAvatar}
+                alt="Profile"
+                className="w-full h-full object-cover"
+                onError={(e) => { e.currentTarget.src = DEFAULT_PROFILE_AVATAR; }}
+              />
+            </div>
+            <div>
+              <h3 className="text-xl font-extrabold text-gray-900 tracking-tight">{displayName}</h3>
+              <p className="text-sm text-gray-500">{displayEmail}</p>
+              {user.studentId && <p className="text-xs text-gray-400 mt-0.5">ID: {user.studentId}</p>}
+              {!profile && <p className="text-[11px] text-gray-400 mt-1">Using local account fallback profile.</p>}
+            </div>
+          </div>
+        )}
+
+        <Separator className="mb-5" />
+
+        {/* Profile fields grid */}
+        <div className="grid grid-cols-1 gap-y-4 gap-x-6 sm:grid-cols-2">
+          {profileFields.map(({ label, value }) => (
+            <div key={label}>
+              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1">{label}</p>
+              <p className="text-sm font-medium text-gray-900">{value}</p>
+            </div>
+          ))}
+
+          {/* Account status — special treatment */}
+          <div>
+            <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1">Account Status</p>
+            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+              user.isActive
+                ? 'bg-green-50 text-green-700 border border-green-200'
+                : 'bg-red-50 text-red-700 border border-red-200'
+            }`}>
+              {user.isActive ? 'Active' : 'Inactive'}
+            </span>
+          </div>
+        </div>
+      </SectionCard>
     </div>
   );
 }
-
-function ProfileLabel({ children }: { children: React.ReactNode }) {
-  return <p className="text-sm font-medium text-gray-500">{children}</p>;
-}
-
-
-
-

@@ -1,4 +1,5 @@
 import { supabase } from './supabaseClient.js';
+import { logger } from './logger.js';
 
 export const writeAuditLog = async ({
   req,
@@ -21,6 +22,6 @@ export const writeAuditLog = async ({
       user_agent: req?.headers?.['user-agent'] || null,
     });
   } catch (error) {
-    console.warn('[audit] log write skipped:', error?.message || error);
+    logger.warn('[audit] log write skipped:', error?.message || error);
   }
 };
