@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Vote, CheckCircle, Clock, Calendar, User as UserIcon,
-  AlertCircle, Info, LogOut, Menu, X, TrendingUp,
+  AlertCircle, Info, LogOut, Menu, X, TrendingUp, BarChart3,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNotification } from '@/contexts/NotificationContext';
@@ -18,6 +18,8 @@ import {
 } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
+import { DashboardHeader } from '@/components/dashboard/DashboardHeader';
+import { CandidateDetailsModal } from '@/components/dashboard/CandidateDetailsModal';
 
 // ─── Shared design primitives (same system as AdminDashboard) ─────────────────
 
@@ -25,7 +27,7 @@ const NAV = [
   { value: 'overview',  label: 'Overview',           icon: TrendingUp },
   { value: 'elections', label: 'Active Elections',    icon: Vote },
   { value: 'history',   label: 'My Voting History',  icon: Clock },
-  { value: 'results',   label: 'Election Results',   icon: TrendingUp },
+  { value: 'results',   label: 'Election Results',   icon: BarChart3 },
   { value: 'profile',   label: 'My Profile',         icon: UserIcon },
 ];
 
@@ -105,20 +107,13 @@ const CardHeading = ({ eyebrow, title }: { eyebrow?: string; title: string }) =>
   </div>
 );
 
-// ─── VotingState type (unchanged) ────────────────────────────────────────────
-interface VotingState {
-  electionId: string;
-  position: string;
-  selectedCandidate: string | null;
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function VoterDashboard() {
   // ── All logic unchanged ───────────────────────────────────────────────────
   const { user, logout } = useAuth();
-  const { showSuccess, showError } = useNotification();
+  const { showError } = useNotification();
   const [activeTab, setActiveTab]             = useState('overview');
   const [isLogoutDialogOpen, setIsLogoutDialogOpen] = useState(false);
   const [elections, setElections]             = useState<Election[]>([]);
@@ -128,8 +123,6 @@ export default function VoterDashboard() {
   const [selectedResultElection, setSelectedResultElection] = useState<Election | null>(null);
   const [selectedElectionResults, setSelectedElectionResults] = useState<ElectionResult[]>([]);
   const [isLoadingResults, setIsLoadingResults] = useState(false);
-  const [votingState, setVotingState]         = useState<VotingState | null>(null);
-  const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
   const [isLoading, setIsLoading]             = useState(true);
   const [error, setError]                     = useState<string | null>(null);
@@ -174,29 +167,7 @@ export default function VoterDashboard() {
 
   const handleSelectElection = (election: Election) => { setSelectedElection(election); };
 
-  const handleSelectCandidate = (position: string, candidateId: string) => {
-    if (selectedElection) {
-      setVotingState({ electionId: selectedElection.id, position, selectedCandidate: candidateId });
-      setIsConfirmModalOpen(true);
-    }
-  };
-
-  const handleConfirmVote = async () => {
-    if (votingState && user) {
-      const result = await castVote(
-        votingState.electionId, user.id,
-        votingState.selectedCandidate!, votingState.position
-      );
-      if (result.success) {
-        showSuccess('Your vote has been recorded successfully!');
-        setIsConfirmModalOpen(false);
-        setVotingState(null);
-        void fetchData();
-      } else {
-        showError(result.error || 'Failed to cast vote');
-      }
-    }
-  };
+  const handleVoteSuccess = () => { void fetchData(); };
 
   const getVotesForPosition = (electionId: string, position: string): VoteType[] =>
     userVotes.filter(v => v.electionId === electionId && v.position === position);
@@ -371,21 +342,10 @@ export default function VoterDashboard() {
         <main className="md:ml-64 min-w-0 flex flex-col min-h-screen">
 
           {/* Page header */}
-          <header className="bg-gradient-to-r from-[#0c1f4a] to-[#1E3A8A] px-5 py-5 sm:px-8">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h1 className="text-xl font-extrabold text-white tracking-tight sm:text-2xl">
-                  {NAV.find(n => n.value === activeTab)?.label ?? 'Student Portal'}
-                </h1>
-                <p className="text-sm text-blue-200/80 mt-0.5">
-                  Welcome, {user?.firstName} {user?.lastName}
-                </p>
-              </div>
-              <span className="inline-flex items-center gap-1.5 bg-white/15 border border-white/20 rounded-full px-3 py-1 text-xs font-semibold text-white w-fit">
-                <UserIcon className="w-3 h-3" /> Student Voter
-              </span>
-            </div>
-          </header>
+          <DashboardHeader
+            activeTabLabel={NAV.find((n) => n.value === activeTab)?.label ?? 'Student Portal'}
+            user={user!}
+          />
 
           {/* Tab panels */}
           <div className="flex-1 px-5 py-6 sm:px-8 sm:py-8">
@@ -397,7 +357,8 @@ export default function VoterDashboard() {
                 <VotingInterface
                   election={selectedElection}
                   onBack={() => setSelectedElection(null)}
-                  onSelectCandidate={handleSelectCandidate}
+                  voterId={user?.id || ''}
+                  onVoteSuccess={handleVoteSuccess}
                   getVotesForPosition={getVotesForPosition}
                 />
               ) : (
@@ -454,43 +415,6 @@ export default function VoterDashboard() {
         </DialogContent>
       </Dialog>
 
-      {/* ── VOTE CONFIRM DIALOG ─────────────────────────────────────────────── */}
-      <Dialog open={isConfirmModalOpen} onOpenChange={setIsConfirmModalOpen}>
-        <DialogContent className="max-w-sm rounded-2xl">
-          <DialogHeader>
-            <DialogTitle className="text-lg font-extrabold tracking-tight">Confirm Your Vote</DialogTitle>
-            <DialogDescription className="text-sm text-gray-500">
-              Please review your selection before submitting.
-            </DialogDescription>
-          </DialogHeader>
-
-          {/* Warning block */}
-          <div className="flex items-start gap-3 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3.5 my-1">
-            <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
-            <div>
-              <p className="text-sm font-semibold text-amber-800">This action is irreversible</p>
-              <p className="text-xs text-amber-700 mt-0.5 leading-relaxed">
-                Once submitted, your vote cannot be changed or withdrawn.
-              </p>
-            </div>
-          </div>
-
-          <DialogFooter className="gap-2 mt-1">
-            <button
-              className="flex-1 sm:flex-none px-4 py-2 text-sm font-semibold rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 transition-colors"
-              onClick={() => setIsConfirmModalOpen(false)}
-            >
-              Cancel
-            </button>
-            <button
-              className="flex-1 sm:flex-none px-4 py-2 text-sm font-semibold rounded-xl bg-[#166534] hover:bg-[#14532d] text-white transition-colors flex items-center justify-center gap-2"
-              onClick={handleConfirmVote}
-            >
-              <CheckCircle className="w-4 h-4" /> Confirm Vote
-            </button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
@@ -700,6 +624,24 @@ function ElectionResultsView({
     );
   }
 
+  const getResultGroup = (position: string) => {
+    if (position.startsWith('SSG ')) return 'SSG Results';
+    if (position.startsWith('FSTLP ')) return 'FSTLP Results';
+    return 'Other Results';
+  };
+
+  const groupedResults = results.reduce<Record<string, ElectionResult[]>>((acc, item) => {
+    const key = getResultGroup(item.position);
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(item);
+    return acc;
+  }, {});
+
+  const groupOrder = ['SSG Results', 'FSTLP Results', 'Other Results'];
+  const orderedGroups = groupOrder
+    .map((group) => ({ group, rows: groupedResults[group] ?? [] }))
+    .filter((entry) => entry.rows.length > 0);
+
   return (
     <div className="space-y-6">
       <div>
@@ -711,37 +653,42 @@ function ElectionResultsView({
       </div>
 
       <div className="space-y-5">
-        {results.map((positionResult) => (
-          <SectionCard key={positionResult.position}>
-            <CardHeading
-              eyebrow="Position"
-              title={`${positionResult.position} (${positionResult.totalVotes} total votes)`}
-            />
+        {orderedGroups.map(({ group, rows }) => (
+          <div key={group} className="space-y-3">
+            <h3 className="text-sm font-extrabold text-gray-700 uppercase tracking-wider">{group}</h3>
+            {rows.map((positionResult) => (
+              <SectionCard key={positionResult.position}>
+                <CardHeading
+                  eyebrow="Position"
+                  title={`${positionResult.position} (${positionResult.totalVotes} total votes)`}
+                />
 
-            <DataTable headers={['Rank', 'Candidate', 'Votes', 'Percentage']} empty={positionResult.candidates.length === 0}>
-              {positionResult.candidates.map((candidate, index) => (
-                <tr key={candidate.candidateId} className="hover:bg-gray-50/70 transition-colors">
-                  <td className="px-5 py-3.5 whitespace-nowrap text-sm font-semibold text-gray-900">#{index + 1}</td>
-                  <td className="px-5 py-3.5 whitespace-nowrap">
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl bg-[#1E3A8A] overflow-hidden flex items-center justify-center text-white text-xs font-bold shrink-0">
-                        {(candidate.photoPath || candidate.photoUrl) ? (
-                          <img
-                            src={candidate.photoPath || candidate.photoUrl}
-                            alt={candidate.displayName}
-                            className="w-full h-full object-cover"
-                          />
-                        ) : candidate.displayName.charAt(0).toUpperCase()}
-                      </div>
-                      <p className="text-sm font-semibold text-gray-900">{candidate.displayName}</p>
-                    </div>
-                  </td>
-                  <td className="px-5 py-3.5 whitespace-nowrap text-sm text-gray-600">{candidate.voteCount}</td>
-                  <td className="px-5 py-3.5 whitespace-nowrap text-sm text-gray-600">{candidate.percentage.toFixed(1)}%</td>
-                </tr>
-              ))}
-            </DataTable>
-          </SectionCard>
+                <DataTable headers={['Rank', 'Candidate', 'Votes', 'Percentage']} empty={positionResult.candidates.length === 0}>
+                  {positionResult.candidates.map((candidate, index) => (
+                    <tr key={candidate.candidateId} className="hover:bg-gray-50/70 transition-colors">
+                      <td className="px-5 py-3.5 whitespace-nowrap text-sm font-semibold text-gray-900">#{index + 1}</td>
+                      <td className="px-5 py-3.5 whitespace-nowrap">
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-xl bg-[#1E3A8A] overflow-hidden flex items-center justify-center text-white text-xs font-bold shrink-0">
+                            {(candidate.photoPath || candidate.photoUrl) ? (
+                              <img
+                                src={candidate.photoPath || candidate.photoUrl}
+                                alt={candidate.displayName}
+                                className="w-full h-full object-cover"
+                              />
+                            ) : candidate.displayName.charAt(0).toUpperCase()}
+                          </div>
+                          <p className="text-sm font-semibold text-gray-900">{candidate.displayName}</p>
+                        </div>
+                      </td>
+                      <td className="px-5 py-3.5 whitespace-nowrap text-sm text-gray-600">{candidate.voteCount}</td>
+                      <td className="px-5 py-3.5 whitespace-nowrap text-sm text-gray-600">{candidate.percentage.toFixed(1)}%</td>
+                    </tr>
+                  ))}
+                </DataTable>
+              </SectionCard>
+            ))}
+          </div>
         ))}
       </div>
     </div>
@@ -833,14 +780,22 @@ function ElectionsList({
 // VOTING INTERFACE (logic unchanged)
 // ═══════════════════════════════════════════════════════════════════════════════
 function VotingInterface({
-  election, onBack, onSelectCandidate, getVotesForPosition,
+  election, onBack, voterId, onVoteSuccess, getVotesForPosition,
 }: {
   election: Election; onBack: () => void;
-  onSelectCandidate: (position: string, candidateId: string) => void;
+  voterId: string;
+  onVoteSuccess: () => void;
   getVotesForPosition: (electionId: string, position: string) => VoteType[];
 }) {
+  const { showSuccess, showError } = useNotification();
   const [positions, setPositions]                 = useState<ElectionPosition[]>([]);
   const [candidatesByPosition, setCandidatesByPosition] = useState<Record<string, Candidate[]>>({});
+  const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
+  const [isCandidateModalOpen, setIsCandidateModalOpen] = useState(false);
+  const [selectedMaxVotes, setSelectedMaxVotes] = useState(1);
+  const [isQuickVotingCandidateId, setIsQuickVotingCandidateId] = useState<string | null>(null);
+  const [localPositionVoteCounts, setLocalPositionVoteCounts] = useState<Record<string, number>>({});
+  const [locallyVotedCandidateIds, setLocallyVotedCandidateIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -860,6 +815,34 @@ function VotingInterface({
     void load();
     return () => { cancelled = true; };
   }, [election.id]);
+
+  const handleQuickVote = async (candidate: Candidate, positionName: string, disabled: boolean) => {
+    if (disabled || isQuickVotingCandidateId !== null) return;
+
+    setIsQuickVotingCandidateId(candidate.id);
+    try {
+      const result = await castVote(candidate.electionId, voterId, candidate.id, candidate.position);
+      if (!result.success) {
+        showError(result.error || 'Failed to cast vote');
+        return;
+      }
+
+      setLocallyVotedCandidateIds((prev) => {
+        const next = new Set(prev);
+        next.add(candidate.id);
+        return next;
+      });
+      setLocalPositionVoteCounts((prev) => ({
+        ...prev,
+        [positionName]: (prev[positionName] ?? 0) + 1,
+      }));
+
+      showSuccess('Your vote has been recorded successfully!');
+      onVoteSuccess();
+    } finally {
+      setIsQuickVotingCandidateId(null);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -888,8 +871,10 @@ function VotingInterface({
           const candidates        = candidatesByPosition[positionName] || [];
           const votesForPosition  = getVotesForPosition(election.id, positionName);
           const maxVotes          = position.voteLimit;
+          const localVotes        = localPositionVoteCounts[positionName] || 0;
+          const usedVotes         = votesForPosition.length + localVotes;
           const votedCandidateIds = new Set(votesForPosition.map((vote) => vote.candidateId));
-          const votesRemaining    = Math.max(0, maxVotes - votesForPosition.length);
+          const votesRemaining    = Math.max(0, maxVotes - usedVotes);
           const hasReachedLimit   = votesRemaining === 0;
 
           return (
@@ -902,7 +887,7 @@ function VotingInterface({
                     ? 'bg-green-50 text-green-700 border border-green-200'
                     : 'bg-blue-50 text-blue-700 border border-blue-200'
                 }`}>
-                  {votesForPosition.length}/{maxVotes} votes used
+                  {usedVotes}/{maxVotes} votes used
                 </span>
               </div>
 
@@ -929,19 +914,44 @@ function VotingInterface({
               {/* Candidate grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {candidates.map((candidate) => (
+                  (() => {
+                    const isVoted = votedCandidateIds.has(candidate.id) || locallyVotedCandidateIds.has(candidate.id);
+                    const isVoting = isQuickVotingCandidateId === candidate.id;
+                    const disabled = hasReachedLimit || isVoted || isVoting || isQuickVotingCandidateId !== null;
+                    return (
                   <CandidateCard
                     key={candidate.id}
                     candidate={candidate}
-                    isVoted={votedCandidateIds.has(candidate.id)}
-                    disabled={hasReachedLimit || votedCandidateIds.has(candidate.id)}
-                    onSelect={() => onSelectCandidate(positionName, candidate.id)}
+                    isVoted={isVoted}
+                    disabled={disabled}
+                    isVoting={isVoting}
+                    onViewDetails={() => {
+                      setSelectedCandidate(candidate);
+                      setSelectedMaxVotes(maxVotes);
+                      setIsCandidateModalOpen(true);
+                    }}
+                    onQuickVote={() => { void handleQuickVote(candidate, positionName, disabled); }}
                   />
+                    );
+                  })()
                 ))}
               </div>
             </div>
           );
         })}
       </div>
+
+      <CandidateDetailsModal
+        isOpen={isCandidateModalOpen}
+        onClose={() => {
+          setIsCandidateModalOpen(false);
+          setSelectedCandidate(null);
+        }}
+        candidate={selectedCandidate}
+        voterId={voterId}
+        maxVotesForPosition={selectedMaxVotes}
+        onVoteSuccess={onVoteSuccess}
+      />
     </div>
   );
 }
@@ -950,9 +960,15 @@ function VotingInterface({
 // CANDIDATE CARD (logic unchanged)
 // ═══════════════════════════════════════════════════════════════════════════════
 function CandidateCard({
-  candidate, isVoted, disabled, onSelect,
-}: { candidate: Candidate; isVoted: boolean; disabled?: boolean; onSelect: () => void }) {
-  const [showDetails, setShowDetails] = useState(false);
+  candidate, isVoted, disabled, isVoting, onViewDetails, onQuickVote,
+}: {
+  candidate: Candidate;
+  isVoted: boolean;
+  disabled?: boolean;
+  isVoting?: boolean;
+  onViewDetails: () => void;
+  onQuickVote: () => void;
+}) {
   const [imageError, setImageError]   = useState(false);
 
   return (
@@ -990,26 +1006,22 @@ function CandidateCard({
       <div className="p-4 space-y-3">
         <div>
           <h4 className="text-sm font-extrabold text-gray-900">{candidate.displayName}</h4>
-          {candidate.bio && (
-            <p className="text-xs text-gray-500 mt-1 line-clamp-2 leading-relaxed">{candidate.bio}</p>
-          )}
+          <p className="text-xs font-semibold text-[#1E3A8A] mt-1">{candidate.position}</p>
+          {candidate.bio && <p className="text-xs text-gray-500 mt-1 line-clamp-2 leading-relaxed">{candidate.bio}</p>}
         </div>
 
         <div className="space-y-2">
-          {candidate.platform && (
-            <button
-              type="button"
-              onClick={() => setShowDetails(!showDetails)}
-              className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
-            >
-              <Info className="w-3.5 h-3.5" />
-              {showDetails ? 'Hide Platform' : 'View Platform'}
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={onViewDetails}
+            className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
+          >
+            <Info className="w-3.5 h-3.5" /> View Details
+          </button>
 
           <button
             type="button"
-            onClick={onSelect}
+            onClick={onQuickVote}
             disabled={disabled}
             className={`
               w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold rounded-xl
@@ -1026,16 +1038,11 @@ function CandidateCard({
               ? <><CheckCircle className="w-3.5 h-3.5" /> Already Voted</>
               : disabled
               ? 'Unavailable'
+              : isVoting
+              ? 'Recording Vote...'
               : <><Vote className="w-3.5 h-3.5" /> Vote</>}
           </button>
         </div>
-
-        {showDetails && candidate.platform && (
-          <div className="pt-3 border-t border-gray-50">
-            <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Platform</p>
-            <p className="text-xs text-gray-600 whitespace-pre-line leading-relaxed">{candidate.platform}</p>
-          </div>
-        )}
       </div>
     </div>
   );

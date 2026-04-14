@@ -25,6 +25,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Slider } from '@/components/ui/slider';
 import { Separator } from '@/components/ui/separator';
+import { JudgeDashboardHeader } from '@/components/dashboard/JudgeDashboardHeader';
 
 // ─── Shared design primitives (same system as all dashboards) ─────────────────
 const NAV = [
@@ -290,21 +291,10 @@ export default function JudgeDashboard() {
 
         {/* ── MAIN CONTENT ─────────────────────────────────────────────── */}
         <main className="md:ml-64 min-w-0 flex flex-col min-h-screen">
-          <header className="bg-gradient-to-r from-[#0c1f4a] to-[#1E3A8A] px-5 py-5 sm:px-8">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h1 className="text-xl font-extrabold text-white tracking-tight sm:text-2xl">
-                  {NAV.find(n => n.value === activeTab)?.label ?? 'Judge Portal'}
-                </h1>
-                <p className="text-sm text-blue-200/80 mt-0.5">
-                  Welcome, Judge {user?.firstName} {user?.lastName}
-                </p>
-              </div>
-              <span className="inline-flex items-center gap-1.5 bg-white/15 border border-white/20 rounded-full px-3 py-1 text-xs font-semibold text-white w-fit">
-                <Star className="w-3 h-3" /> Judge
-              </span>
-            </div>
-          </header>
+          <JudgeDashboardHeader
+            activeTabLabel={NAV.find((n) => n.value === activeTab)?.label ?? 'Judge Portal'}
+            user={user!}
+          />
 
           <div className="flex-1 px-5 py-6 sm:px-8 sm:py-8">
             <TabsContent value="overview">

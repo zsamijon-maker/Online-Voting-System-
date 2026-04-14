@@ -199,16 +199,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const logout = useCallback(async () => {
+    const accessToken = getToken();
+    const refreshToken = getRefreshToken();
+    const isVoterSession = !!user?.roles?.includes('voter');
+
     try {
-      await api.post('/api/auth/logout', {});
+      if (accessToken || refreshToken) {
+        await api.post('/api/auth/logout', { accessToken, refreshToken });
+      }
     } catch {
       // Ignore logout errors
     } finally {
-      await supabase.auth.signOut({ scope: 'local' }).catch(() => null);
+      await supabase.auth.signOut({ scope: isVoterSession ? 'global' : 'local' }).catch(() => null);
       clearToken();
+      localStorage.removeItem('voting_system_current_user');
       setUser(null);
     }
-  }, []);
+  }, [user]);
 
   const hasRole = useCallback((role: UserRole): boolean => {
     if (!user) return false;

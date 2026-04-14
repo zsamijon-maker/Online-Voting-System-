@@ -679,12 +679,17 @@ function ContestantsTab({ pageants, refreshTick, onAddContestant, onEditContesta
 
   useEffect(() => {
     let mounted = true;
-    if (!selectedPageantId) { setContestants([]); return; }
-    setLoadingContestants(true);
-    getContestantsByPageant(selectedPageantId)
-      .then((c) => { if (mounted) setContestants(c); })
-      .catch(() => { if (mounted) setContestants([]); })
-      .finally(() => { if (mounted) setLoadingContestants(false); });
+    if (!selectedPageantId) {
+      Promise.resolve().then(() => { setContestants([]); });
+      return;
+    }
+    Promise.resolve().then(() => {
+      setLoadingContestants(true);
+      getContestantsByPageant(selectedPageantId)
+        .then((c) => { if (mounted) setContestants(c); })
+        .catch(() => { if (mounted) setContestants([]); })
+        .finally(() => { if (mounted) setLoadingContestants(false); });
+    });
     return () => { mounted = false; };
   }, [selectedPageantId, refreshTick]);
 
@@ -775,12 +780,20 @@ function CriteriaTab({ pageants, onAddCriteria }: { pageants: Pageant[]; onAddCr
 
   useEffect(() => {
     let mounted = true;
-    if (!selectedPageantId) { setCriteria([]); setWeightValidation({ valid: true, total: 0 }); return; }
-    setLoadingCriteria(true);
-    Promise.all([getCriteriaByPageant(selectedPageantId), validateCriteriaWeights(selectedPageantId)])
-      .then(([c, validation]) => { if (!mounted) return; setCriteria(c); setWeightValidation(validation); })
-      .catch(() => { if (!mounted) return; setCriteria([]); setWeightValidation({ valid: true, total: 0 }); })
-      .finally(() => { if (mounted) setLoadingCriteria(false); });
+    if (!selectedPageantId) {
+      Promise.resolve().then(() => {
+        setCriteria([]);
+        setWeightValidation({ valid: true, total: 0 });
+      });
+      return;
+    }
+    Promise.resolve().then(() => {
+      setLoadingCriteria(true);
+      Promise.all([getCriteriaByPageant(selectedPageantId), validateCriteriaWeights(selectedPageantId)])
+        .then(([c, validation]) => { if (!mounted) return; setCriteria(c); setWeightValidation(validation); })
+        .catch(() => { if (!mounted) return; setCriteria([]); setWeightValidation({ valid: true, total: 0 }); })
+        .finally(() => { if (mounted) setLoadingCriteria(false); });
+    });
     return () => { mounted = false; };
   }, [selectedPageantId]);
 
@@ -852,8 +865,13 @@ function JudgesTab({ pageants, onAssignJudge }: { pageants: Pageant[]; onAssignJ
   const [judges, setJudges]                       = useState<PageantJudge[]>([]);
 
   useEffect(() => {
-    if (!selectedPageantId) { setJudges([]); return; }
-    getPageantJudges(selectedPageantId).then(setJudges);
+    if (!selectedPageantId) {
+      Promise.resolve().then(() => { setJudges([]); });
+      return;
+    }
+    Promise.resolve().then(() => {
+      getPageantJudges(selectedPageantId).then(setJudges);
+    });
   }, [selectedPageantId]);
 
   return (
@@ -1003,8 +1021,10 @@ function ContestantForm({ contestant, scoringMethod, submitLabel, onSubmit, onCa
 
   useEffect(() => {
     if (!contestant) return;
-    setFormData({ contestantNumber: contestant.contestantNumber, firstName: contestant.firstName, lastName: contestant.lastName, gender: contestant.gender ?? undefined, bio: contestant.bio || '', age: contestant.age, department: contestant.department || '', photoUrl: contestant.photoUrl || '', photoPath: contestant.photoPath || '', imageFile: undefined });
-    setPreviewUrl(''); setFileName(''); setFileValidationError(''); setGenderValidationError('');
+    Promise.resolve().then(() => {
+      setFormData({ contestantNumber: contestant.contestantNumber, firstName: contestant.firstName, lastName: contestant.lastName, gender: contestant.gender ?? undefined, bio: contestant.bio || '', age: contestant.age, department: contestant.department || '', photoUrl: contestant.photoUrl || '', photoPath: contestant.photoPath || '', imageFile: undefined });
+      setPreviewUrl(''); setFileName(''); setFileValidationError(''); setGenderValidationError('');
+    });
   }, [contestant]);
 
   useEffect(() => { return () => { if (previewUrl) URL.revokeObjectURL(previewUrl); }; }, [previewUrl]);
@@ -1203,7 +1223,15 @@ function PageantResultsDisplay({ results, scoringMethod, pageant }: {
   results: PageantResultsResponse; scoringMethod?: Pageant['scoringMethod']; pageant?: Pageant | null;
 }) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
-  const toggleRow = (id: string) => setExpandedRows((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleRow = (id: string) => setExpandedRows((prev) => {
+    const n = new Set(prev);
+    if (n.has(id)) {
+      n.delete(id);
+    } else {
+      n.add(id);
+    }
+    return n;
+  });
 
   const resolvedScoringMode = (firstResult?: PageantResult) =>
     firstResult?.scoringMode || (scoringMethod === 'average' ? 'AVERAGE' : scoringMethod === 'ranking' ? 'RANKING' : scoringMethod === 'ranking_by_gender' ? 'RANKING_BY_GENDER' : 'WEIGHTED_MEAN');

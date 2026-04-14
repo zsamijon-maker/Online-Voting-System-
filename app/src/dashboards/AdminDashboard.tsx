@@ -25,14 +25,13 @@ import type {
   PageantFormData, Candidate, ElectionPosition, CandidateFormData,
   ElectionResult, Contestant, ContestantFormData, PageantResultsResponse,
 } from '@/types';
-import { formatDate, formatDateTime, formatRoleName, formatScoringMethod } from '@/utils/formatters';
+import { formatDate, formatDateTime, formatRoleName, formatScoringMethod, formatElectionType } from '@/utils/formatters';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -982,7 +981,10 @@ function ElectionsTab({ isActive }: { isActive: boolean }) {
     setElections(data);
   }, []);
 
-  useEffect(() => { if (!isActive) return; void fetchElections(); }, [isActive, fetchElections]);
+  useEffect(() => {
+    if (!isActive) return;
+    Promise.resolve().then(() => { void fetchElections(); });
+  }, [isActive, fetchElections]);
 
   const handleSaveElection = async (formData: ElectionFormData) => {
     if (editingElection) {
@@ -1074,7 +1076,7 @@ function ElectionsTab({ isActive }: { isActive: boolean }) {
           <tr key={election.id} className="hover:bg-gray-50/70 transition-colors">
             <td className="px-5 py-3.5">
               <p className="text-sm font-semibold text-gray-900">{election.title}</p>
-              <p className="text-xs text-gray-400 capitalize">{election.type.replace(/_/g, ' ')}</p>
+              <p className="text-xs text-gray-400 capitalize">{formatElectionType(election.type)}</p>
             </td>
             <td className="px-5 py-3.5 whitespace-nowrap">
               <StatusBadge status={election.status} />
@@ -1181,7 +1183,10 @@ function PageantsTab({ isActive }: { isActive: boolean }) {
     const data = await getAllPageants(); setPageants(data);
   }, []);
 
-  useEffect(() => { if (!isActive) return; void fetchPageants(); }, [isActive, fetchPageants]);
+  useEffect(() => {
+    if (!isActive) return;
+    Promise.resolve().then(() => { void fetchPageants(); });
+  }, [isActive, fetchPageants]);
 
   const handleSavePageant = async (formData: PageantFormData) => {
     if (editingPageant) {
@@ -1364,17 +1369,19 @@ function ElectionEditorForm({ election, onSubmit, onCancel }: {
 }) {
   const [formData, setFormData] = useState<ElectionFormData>({
     title: election?.title || '', description: election?.description || '',
-    type: election?.type || 'student_government', startDate: election?.startDate || '',
+    type: election?.type || 'ssg_fstlp_officers', startDate: election?.startDate || '',
     endDate: election?.endDate || '', allowWriteIns: election?.allowWriteIns || false,
     maxVotesPerVoter: election?.maxVotesPerVoter || 1, resultsPublic: election?.resultsPublic || false,
   });
 
   useEffect(() => {
-    setFormData({
-      title: election?.title || '', description: election?.description || '',
-      type: election?.type || 'student_government', startDate: election?.startDate || '',
-      endDate: election?.endDate || '', allowWriteIns: election?.allowWriteIns || false,
-      maxVotesPerVoter: election?.maxVotesPerVoter || 1, resultsPublic: election?.resultsPublic || false,
+    Promise.resolve().then(() => {
+      setFormData({
+        title: election?.title || '', description: election?.description || '',
+        type: election?.type || 'ssg_fstlp_officers', startDate: election?.startDate || '',
+        endDate: election?.endDate || '', allowWriteIns: election?.allowWriteIns || false,
+        maxVotesPerVoter: election?.maxVotesPerVoter || 1, resultsPublic: election?.resultsPublic || false,
+      });
     });
   }, [election]);
 
@@ -1390,8 +1397,7 @@ function ElectionEditorForm({ election, onSubmit, onCancel }: {
         <Select value={formData.type} onValueChange={(value) => setFormData({ ...formData, type: value as ElectionFormData['type'] })}>
           <SelectTrigger className={formInputClass}><SelectValue /></SelectTrigger>
           <SelectContent className="rounded-xl">
-            <SelectItem value="student_government">Student Government</SelectItem>
-            <SelectItem value="fstlp_officers">FSTLP Officers</SelectItem>
+            <SelectItem value="ssg_fstlp_officers">SSG &amp; FSTLP Officers</SelectItem>
             <SelectItem value="class_representative">Class Representative</SelectItem>
             <SelectItem value="club_officers">Club Officers</SelectItem>
             <SelectItem value="other">Other</SelectItem>
@@ -1429,10 +1435,12 @@ function PageantEditorForm({ pageant, onSubmit, onCancel }: {
   });
 
   useEffect(() => {
-    setFormData({
-      name: pageant?.name || '', description: pageant?.description || '',
-      eventDate: pageant?.eventDate || '', scoringMethod: pageant?.scoringMethod || 'weighted',
-      totalWeight: pageant?.totalWeight || 100, resultsPublic: pageant?.resultsPublic || false,
+    Promise.resolve().then(() => {
+      setFormData({
+        name: pageant?.name || '', description: pageant?.description || '',
+        eventDate: pageant?.eventDate || '', scoringMethod: pageant?.scoringMethod || 'weighted',
+        totalWeight: pageant?.totalWeight || 100, resultsPublic: pageant?.resultsPublic || false,
+      });
     });
   }, [pageant]);
 
@@ -1486,14 +1494,16 @@ function AdminCandidateManager({
   });
 
   useEffect(() => {
-    if (!editingCandidate) {
-      setFormData({ positionId: positions[0]?.id || '', displayName: '', bio: '', platform: '', photoUrl: '', isWriteIn: false });
-      return;
-    }
-    setFormData({
-      positionId: editingCandidate.positionId || '', displayName: editingCandidate.displayName,
-      bio: editingCandidate.bio || '', platform: editingCandidate.platform || '',
-      photoUrl: editingCandidate.photoUrl || '', isWriteIn: editingCandidate.isWriteIn,
+    Promise.resolve().then(() => {
+      if (!editingCandidate) {
+        setFormData({ positionId: positions[0]?.id || '', displayName: '', bio: '', platform: '', photoUrl: '', isWriteIn: false });
+        return;
+      }
+      setFormData({
+        positionId: editingCandidate.positionId || '', displayName: editingCandidate.displayName,
+        bio: editingCandidate.bio || '', platform: editingCandidate.platform || '',
+        photoUrl: editingCandidate.photoUrl || '', isWriteIn: editingCandidate.isWriteIn,
+      });
     });
   }, [editingCandidate, positions]);
 
@@ -1586,14 +1596,16 @@ function AdminContestantManager({
   });
 
   useEffect(() => {
-    if (!editingContestant) {
-      setFormData({ contestantNumber: Math.max(1, contestants.length + 1), firstName: '', lastName: '', gender: undefined, bio: '', age: undefined, department: '', photoUrl: '' });
-      return;
-    }
-    setFormData({
-      contestantNumber: editingContestant.contestantNumber, firstName: editingContestant.firstName,
-      lastName: editingContestant.lastName, gender: editingContestant.gender ?? undefined,
-      bio: editingContestant.bio || '', age: editingContestant.age, department: editingContestant.department || '', photoUrl: editingContestant.photoUrl || '',
+    Promise.resolve().then(() => {
+      if (!editingContestant) {
+        setFormData({ contestantNumber: Math.max(1, contestants.length + 1), firstName: '', lastName: '', gender: undefined, bio: '', age: undefined, department: '', photoUrl: '' });
+        return;
+      }
+      setFormData({
+        contestantNumber: editingContestant.contestantNumber, firstName: editingContestant.firstName,
+        lastName: editingContestant.lastName, gender: editingContestant.gender ?? undefined,
+        bio: editingContestant.bio || '', age: editingContestant.age, department: editingContestant.department || '', photoUrl: editingContestant.photoUrl || '',
+      });
     });
   }, [editingContestant, contestants.length]);
 
@@ -1679,32 +1691,55 @@ function AdminContestantManager({
 function AdminElectionResultsView({ results }: { results: ElectionResult[] }) {
   if (results.length === 0) return <p className="text-sm text-gray-400 py-4">No result records available.</p>;
 
+  const getResultGroup = (position: string) => {
+    if (position.startsWith('SSG ')) return 'SSG Results';
+    if (position.startsWith('FSTLP ')) return 'FSTLP Results';
+    return 'Other Results';
+  };
+
+  const groupedResults = results.reduce<Record<string, ElectionResult[]>>((acc, item) => {
+    const key = getResultGroup(item.position);
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(item);
+    return acc;
+  }, {});
+
+  const groupOrder = ['SSG Results', 'FSTLP Results', 'Other Results'];
+  const orderedGroups = groupOrder
+    .map((group) => ({ group, rows: groupedResults[group] ?? [] }))
+    .filter((entry) => entry.rows.length > 0);
+
   return (
     <div className="space-y-4 pt-1">
-      {results.map((positionResult) => (
-        <div key={positionResult.position} className="rounded-2xl border border-gray-100 overflow-hidden">
-          <div className="px-5 py-3 bg-gray-50 border-b border-gray-100">
-            <p className="font-extrabold text-gray-900 text-sm">{positionResult.position}</p>
-            <p className="text-xs text-gray-400 mt-0.5">Total votes: {positionResult.totalVotes}</p>
-          </div>
-          <table className="min-w-full divide-y divide-gray-50">
-            <thead>
-              <tr>
-                <th className="px-5 py-2 text-left text-xs font-bold text-gray-500 uppercase">Candidate</th>
-                <th className="px-5 py-2 text-right text-xs font-bold text-gray-500 uppercase">Votes</th>
-                <th className="px-5 py-2 text-right text-xs font-bold text-gray-500 uppercase">%</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {positionResult.candidates.map((candidate) => (
-                <tr key={candidate.candidateId} className="hover:bg-gray-50/70">
-                  <td className="px-5 py-2.5 text-sm text-gray-900">{candidate.displayName}</td>
-                  <td className="px-5 py-2.5 text-sm text-right text-gray-600">{candidate.voteCount}</td>
-                  <td className="px-5 py-2.5 text-sm text-right text-gray-600">{candidate.percentage.toFixed(1)}%</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {orderedGroups.map(({ group, rows }) => (
+        <div key={group} className="space-y-2">
+          <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">{group}</p>
+          {rows.map((positionResult) => (
+            <div key={positionResult.position} className="rounded-2xl border border-gray-100 overflow-hidden">
+              <div className="px-5 py-3 bg-gray-50 border-b border-gray-100">
+                <p className="font-extrabold text-gray-900 text-sm">{positionResult.position}</p>
+                <p className="text-xs text-gray-400 mt-0.5">Total votes: {positionResult.totalVotes}</p>
+              </div>
+              <table className="min-w-full divide-y divide-gray-50">
+                <thead>
+                  <tr>
+                    <th className="px-5 py-2 text-left text-xs font-bold text-gray-500 uppercase">Candidate</th>
+                    <th className="px-5 py-2 text-right text-xs font-bold text-gray-500 uppercase">Votes</th>
+                    <th className="px-5 py-2 text-right text-xs font-bold text-gray-500 uppercase">%</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {positionResult.candidates.map((candidate) => (
+                    <tr key={candidate.candidateId} className="hover:bg-gray-50/70">
+                      <td className="px-5 py-2.5 text-sm text-gray-900">{candidate.displayName}</td>
+                      <td className="px-5 py-2.5 text-sm text-right text-gray-600">{candidate.voteCount}</td>
+                      <td className="px-5 py-2.5 text-sm text-right text-gray-600">{candidate.percentage.toFixed(1)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
         </div>
       ))}
     </div>

@@ -974,18 +974,38 @@ export const setupStaffTotp = async (req, res) => {
   });
 };
 
-// Logout endpoint (missing)
+// Logout endpoint
 export const logout = async (req, res) => {
   try {
-    const { accessToken } = req.body;
-    if (accessToken) {
-      await supabaseAuth.auth.setAuth(accessToken);
-      const { error } = await supabaseAuth.auth.signOut();
-      if (error) throw error;
+    const authHeader = req.headers.authorization;
+    const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    const accessToken = req.body?.accessToken || bearerToken;
+    const refreshToken = req.body?.refreshToken || null;
+
+    if (!accessToken && !refreshToken) {
+      return res.status(400).json({ error: 'No session token provided for logout.' });
     }
-    res.json({ message: 'Logged out successfully.' });
+
+    if (accessToken && refreshToken) {
+      const { error: setSessionError } = await supabaseAuth.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      });
+
+      if (setSessionError) {
+        throw setSessionError;
+      }
+    } else if (accessToken) {
+      await supabaseAuth.auth.setAuth(accessToken);
+    }
+
+    const { error } = await supabaseAuth.auth.signOut({ scope: 'local' });
+    if (error) throw error;
+
+    return res.json({ message: 'Logged out successfully.' });
   } catch (err) {
-    res.status(500).json({ error: 'Logout failed.' });
+    logger.warn('[auth] logout failed', { error: err?.message });
+    return res.status(500).json({ error: 'Logout failed.' });
   }
 };
 

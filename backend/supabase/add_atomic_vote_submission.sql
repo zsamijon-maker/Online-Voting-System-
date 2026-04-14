@@ -63,6 +63,16 @@ BEGIN
 
   IF v_max_votes IS NULL OR v_max_votes < 1 THEN
     v_max_votes := CASE v_candidate.position
+      WHEN 'SSG President' THEN 1
+      WHEN 'SSG Vice President' THEN 1
+      WHEN 'SSG Senators' THEN 12
+      WHEN 'FSTLP President' THEN 1
+      WHEN 'FSTLP Vice President' THEN 1
+      WHEN 'FSTLP Secretary' THEN 1
+      WHEN 'FSTLP Treasurer' THEN 1
+      WHEN 'FSTLP Auditor' THEN 1
+      WHEN 'FSTLP PIO' THEN 2
+      WHEN 'FSTLP Board Members' THEN 6
       WHEN 'President' THEN 1
       WHEN 'Vice President' THEN 1
       WHEN 'Senators' THEN 12

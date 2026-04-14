@@ -4,19 +4,17 @@ import { writeAuditLog } from '../lib/auditLogger.js';
 import { logger } from '../lib/logger.js';
 
 const PREDEFINED_ELECTION_POSITIONS = Object.freeze({
-  student_government: [
-    { position_name: 'President', max_vote: 1 },
-    { position_name: 'Vice President', max_vote: 1 },
-    { position_name: 'Senators', max_vote: 12 },
-  ],
-  fstlp_officers: [
-    { position_name: 'President', max_vote: 1 },
-    { position_name: 'Vice President', max_vote: 1 },
-    { position_name: 'Secretary', max_vote: 1 },
-    { position_name: 'Treasurer', max_vote: 1 },
-    { position_name: 'Auditor', max_vote: 1 },
-    { position_name: 'PIO', max_vote: 2 },
-    { position_name: 'Board Members', max_vote: 6 },
+  ssg_fstlp_officers: [
+    { position_name: 'SSG President', max_vote: 1 },
+    { position_name: 'SSG Vice President', max_vote: 1 },
+    { position_name: 'SSG Senators', max_vote: 12 },
+    { position_name: 'FSTLP President', max_vote: 1 },
+    { position_name: 'FSTLP Vice President', max_vote: 1 },
+    { position_name: 'FSTLP Secretary', max_vote: 1 },
+    { position_name: 'FSTLP Treasurer', max_vote: 1 },
+    { position_name: 'FSTLP Auditor', max_vote: 1 },
+    { position_name: 'FSTLP PIO', max_vote: 2 },
+    { position_name: 'FSTLP Board Members', max_vote: 6 },
   ],
 });
 

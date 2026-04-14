@@ -180,9 +180,9 @@ export const seedUsers: User[] = [
 export const seedElections: Election[] = [
   {
     id: 'election-001',
-    title: 'Student Government Election 2025',
-    description: 'Annual election for Student Government positions including President, Vice President, Secretary, and Treasurer.',
-    type: 'student_government',
+    title: 'SSG & FSTLP Officers Election 2025',
+    description: 'Annual election for SSG and FSTLP officer positions.',
+    type: 'ssg_fstlp_officers',
     status: 'active',
     startDate: '2024-12-01T00:00:00Z',
     endDate: '2024-12-31T23:59:59Z',

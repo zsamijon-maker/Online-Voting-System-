@@ -150,21 +150,25 @@ const FormField = ({ label, hint, children }: { label: string; hint?: string; ch
 );
 const fic = "rounded-xl border-gray-200 bg-gray-50/60 text-sm focus:ring-[#1E3A8A]/30 focus:border-[#1E3A8A]";
 
-// ─── Position constants (unchanged) ──────────────────────────────────────────
-const STUDENT_GOVERNMENT_POSITIONS = [
-  { name: 'President', maxVote: 1 },
-  { name: 'Vice President', maxVote: 1 },
-  { name: 'Senators', maxVote: 12 },
+// ─── Position constants (merged type) ────────────────────────────────────────
+const SSG_FSTLP_OFFICERS_POSITIONS = [
+  { name: 'SSG President', maxVote: 1 },
+  { name: 'SSG Vice President', maxVote: 1 },
+  { name: 'SSG Senators', maxVote: 12 },
+  { name: 'FSTLP President', maxVote: 1 },
+  { name: 'FSTLP Vice President', maxVote: 1 },
+  { name: 'FSTLP Secretary', maxVote: 1 },
+  { name: 'FSTLP Treasurer', maxVote: 1 },
+  { name: 'FSTLP Auditor', maxVote: 1 },
+  { name: 'FSTLP PIO', maxVote: 2 },
+  { name: 'FSTLP Board Members', maxVote: 6 },
 ];
-const FSTLP_OFFICERS_POSITIONS = [
-  { name: 'President', maxVote: 1 },
-  { name: 'Vice President', maxVote: 1 },
-  { name: 'Secretary', maxVote: 1 },
-  { name: 'Treasurer', maxVote: 1 },
-  { name: 'Auditor', maxVote: 1 },
-  { name: 'PIO', maxVote: 2 },
-  { name: 'Board Members', maxVote: 6 },
-];
+
+const getResultGroup = (position: string) => {
+  if (position.startsWith('SSG ')) return 'SSG Results';
+  if (position.startsWith('FSTLP ')) return 'FSTLP Results';
+  return 'Other Results';
+};
 
 // ─── Date helpers (unchanged) ─────────────────────────────────────────────────
 const toLocalDateTimeInputValue = (value?: string) => {
@@ -674,12 +678,16 @@ function CandidatesTab({
 
   useEffect(() => {
     if (selectedElectionId) {
-      setIsLoading(true);
-      getCandidatesByElection(selectedElectionId)
-        .then(setCandidates)
-        .catch(() => setCandidates([]))
-        .finally(() => setIsLoading(false));
-    } else { setCandidates([]); }
+      Promise.resolve().then(() => {
+        setIsLoading(true);
+        getCandidatesByElection(selectedElectionId)
+          .then(setCandidates)
+          .catch(() => setCandidates([]))
+          .finally(() => setIsLoading(false));
+      });
+    } else {
+      Promise.resolve().then(() => { setCandidates([]); });
+    }
   }, [selectedElectionId]);
 
   return (
@@ -825,7 +833,7 @@ function ElectionForm({
   const [formData, setFormData] = useState<ElectionFormData>({
     title: election?.title || '',
     description: election?.description || '',
-    type: election?.type || 'student_government',
+    type: election?.type || 'ssg_fstlp_officers',
     startDate: toLocalDateTimeInputValue(election?.startDate),
     endDate: toLocalDateTimeInputValue(election?.endDate),
     allowWriteIns: election?.allowWriteIns || false,
@@ -833,10 +841,8 @@ function ElectionForm({
     resultsPublic: election?.resultsPublic || false,
   });
 
-  const isStudentGovernment    = formData.type === 'student_government';
-  const isFstlpOfficers        = formData.type === 'fstlp_officers';
-  const usesPredefinedPositions = isStudentGovernment || isFstlpOfficers;
-  const predefinedPositionCards = isStudentGovernment ? STUDENT_GOVERNMENT_POSITIONS : isFstlpOfficers ? FSTLP_OFFICERS_POSITIONS : [];
+  const usesPredefinedPositions = formData.type === 'ssg_fstlp_officers';
+  const predefinedPositionCards = usesPredefinedPositions ? SSG_FSTLP_OFFICERS_POSITIONS : [];
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -862,14 +868,13 @@ function ElectionForm({
             const nextType = value as ElectionFormData['type'];
             setFormData((prev) => ({
               ...prev, type: nextType,
-              maxVotesPerVoter: (nextType === 'student_government' || nextType === 'fstlp_officers') ? 1 : prev.maxVotesPerVoter,
+              maxVotesPerVoter: nextType === 'ssg_fstlp_officers' ? 1 : prev.maxVotesPerVoter,
             }));
           }}
         >
           <SelectTrigger className={fic}><SelectValue /></SelectTrigger>
           <SelectContent className="rounded-xl">
-            <SelectItem value="student_government">Student Government</SelectItem>
-            <SelectItem value="fstlp_officers">FSTLP Officers</SelectItem>
+            <SelectItem value="ssg_fstlp_officers">SSG &amp; FSTLP Officers</SelectItem>
             <SelectItem value="class_representative">Class Representative</SelectItem>
             <SelectItem value="club_officers">Club Officers</SelectItem>
             <SelectItem value="other">Other</SelectItem>
@@ -879,9 +884,7 @@ function ElectionForm({
 
       {usesPredefinedPositions && (
         <div className="rounded-2xl border border-blue-100 bg-blue-50/60 p-4">
-          <p className="text-sm font-extrabold text-blue-900 mb-1">
-            {isStudentGovernment ? 'Student Government Positions' : 'FSTLP Officers Positions'}
-          </p>
+          <p className="text-sm font-extrabold text-blue-900 mb-1">SSG &amp; FSTLP Officers Positions</p>
           <p className="text-xs text-blue-600 mb-3">Positions and vote limits are generated automatically.</p>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
             {predefinedPositionCards.map((position) => (
@@ -949,17 +952,19 @@ function CandidateForm({
 
   useEffect(() => {
     let mounted = true;
-    setIsLoadingPositions(true);
-    getElectionPositions(electionId)
-      .then((pos) => {
-        if (!mounted) return;
-        setPositions(pos);
-        if (pos.length > 0) {
-          setFormData((prev) => ({ ...prev, positionId: pos[0].id, position: pos[0].name }));
-        }
-      })
-      .catch(() => { if (!mounted) return; setPositions([]); })
-      .finally(() => { if (!mounted) return; setIsLoadingPositions(false); });
+    Promise.resolve().then(() => {
+      setIsLoadingPositions(true);
+      getElectionPositions(electionId)
+        .then((pos) => {
+          if (!mounted) return;
+          setPositions(pos);
+          if (pos.length > 0) {
+            setFormData((prev) => ({ ...prev, positionId: pos[0].id, position: pos[0].name }));
+          }
+        })
+        .catch(() => { if (!mounted) return; setPositions([]); })
+        .finally(() => { if (!mounted) return; setIsLoadingPositions(false); });
+    });
     return () => { mounted = false; };
   }, [electionId]);
 
@@ -1107,10 +1112,26 @@ function ResultsDisplay({
   const highestTurnoutPosition      = normalizedResults.length > 0
     ? [...normalizedResults].sort((a, b) => b.totalVotes - a.totalVotes)[0] : null;
 
-  const togglePosition  = (position: string) => setExpandedPositions((prev) => { const n = new Set(prev); n.has(position) ? n.delete(position) : n.add(position); return n; });
+  const togglePosition  = (position: string) => setExpandedPositions((prev) => {
+    const n = new Set(prev);
+    if (n.has(position)) {
+      n.delete(position);
+    } else {
+      n.add(position);
+    }
+    return n;
+  });
   const toggleCandidate = (position: string, candidateId: string) => {
     const key = `${position}::${candidateId}`;
-    setExpandedCandidates((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+    setExpandedCandidates((prev) => {
+      const n = new Set(prev);
+      if (n.has(key)) {
+        n.delete(key);
+      } else {
+        n.add(key);
+      }
+      return n;
+    });
   };
 
   const rankBadge = (rank: number) => {
@@ -1131,7 +1152,17 @@ function ResultsDisplay({
     );
   }
 
-  const positionTotalsChart = normalizedResults.map((row) => ({ position: row.position, votes: row.totalVotes }));
+  const groupedResults = normalizedResults.reduce<Record<string, typeof normalizedResults>>((acc, row) => {
+    const key = getResultGroup(row.position);
+    if (!acc[key]) acc[key] = [];
+    acc[key].push(row);
+    return acc;
+  }, {});
+
+  const groupOrder = ['SSG Results', 'FSTLP Results', 'Other Results'];
+  const orderedGroups = groupOrder
+    .map((group) => ({ group, rows: groupedResults[group] ?? [] }))
+    .filter((entry) => entry.rows.length > 0);
 
   return (
     <div className="space-y-5 pt-1">
@@ -1173,154 +1204,176 @@ function ResultsDisplay({
         <h4 className="text-base font-extrabold text-gray-900 flex items-center gap-2 mb-4">
           <Crown className="w-5 h-5 text-amber-500" /> Position Winners
         </h4>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-          {normalizedResults.map((row) => {
-            const winner      = row.candidates[0];
-            const tiedWinners = row.candidates.filter((c) => c.voteCount === winner.voteCount);
-            return (
-              <div key={row.position} className="rounded-xl border border-amber-200 bg-white p-3.5">
-                <p className="text-xs font-bold text-amber-600 uppercase tracking-wider mb-1">{row.position}</p>
-                <p className="text-sm font-extrabold text-gray-900">{winner.displayName}</p>
-                <p className="text-xs text-gray-500 mt-0.5">{winner.voteCount} votes · {winner.percentage.toFixed(1)}%</p>
-                {tiedWinners.length > 1 && (
-                  <span className="mt-2 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-700 border border-amber-200">
-                    Tie ({tiedWinners.length})
-                  </span>
-                )}
+        <div className="space-y-4">
+          {orderedGroups.map(({ group, rows }) => (
+            <div key={group}>
+              <p className="text-xs font-bold text-amber-700 uppercase tracking-wider mb-2">{group}</p>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+                {rows.map((row) => {
+                  const winner = row.candidates[0];
+                  const tiedWinners = row.candidates.filter((c) => c.voteCount === winner.voteCount);
+                  return (
+                    <div key={row.position} className="rounded-xl border border-amber-200 bg-white p-3.5">
+                      <p className="text-xs font-bold text-amber-600 uppercase tracking-wider mb-1">{row.position}</p>
+                      <p className="text-sm font-extrabold text-gray-900">{winner.displayName}</p>
+                      <p className="text-xs text-gray-500 mt-0.5">{winner.voteCount} votes · {winner.percentage.toFixed(1)}%</p>
+                      {tiedWinners.length > 1 && (
+                        <span className="mt-2 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-700 border border-amber-200">
+                          Tie ({tiedWinners.length})
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-            );
-          })}
+            </div>
+          ))}
         </div>
       </div>
 
       {/* Position comparison chart */}
       <SectionCard>
         <CardHeading eyebrow="Chart" title="Position Comparison (Total Votes)" />
-        <ResponsiveContainer width="100%" height={260}>
-          <BarChart data={positionTotalsChart} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
-            <XAxis dataKey="position" tick={{ fontSize: 11 }} />
-            <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-            <Tooltip
-              contentStyle={{ borderRadius: 12, border: '1px solid #e5e7eb', fontSize: 12 }}
-              formatter={(value: number) => [`${value} votes`, 'Total Votes']}
-            />
-            <Bar dataKey="votes" fill="#1E3A8A" radius={[6, 6, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
+        <div className="space-y-5">
+          {orderedGroups.map(({ group, rows }) => {
+            const positionTotalsChart = rows.map((row) => ({ position: row.position, votes: row.totalVotes }));
+            return (
+              <div key={group} className="rounded-xl border border-gray-100 p-3">
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">{group}</p>
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart data={positionTotalsChart} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
+                    <XAxis dataKey="position" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                    <Tooltip
+                      contentStyle={{ borderRadius: 12, border: '1px solid #e5e7eb', fontSize: 12 }}
+                      formatter={(value: number) => [`${value} votes`, 'Total Votes']}
+                    />
+                    <Bar dataKey="votes" fill="#1E3A8A" radius={[6, 6, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            );
+          })}
+        </div>
       </SectionCard>
 
       {/* Per-position expandable sections */}
-      {normalizedResults.map((result) => {
-        const isExpanded = expandedPositions.has(result.position);
-        const candidateChartData = result.candidates.map((candidate) => ({
-          name: candidate.displayName, votes: candidate.voteCount, percentage: candidate.percentage,
-        }));
+      {orderedGroups.map(({ group, rows }) => (
+        <div key={group} className="space-y-3">
+          <h4 className="text-sm font-extrabold text-gray-700 uppercase tracking-wider">{group}</h4>
+          {rows.map((result) => {
+            const isExpanded = expandedPositions.has(result.position);
+            const candidateChartData = result.candidates.map((candidate) => ({
+              name: candidate.displayName, votes: candidate.voteCount, percentage: candidate.percentage,
+            }));
 
-        return (
-          <div key={result.position} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-            <button
-              type="button"
-              className="w-full px-5 py-4 flex items-center justify-between hover:bg-gray-50/70 text-left transition-colors"
-              onClick={() => togglePosition(result.position)}
-            >
-              <div>
-                <h4 className="text-base font-extrabold text-gray-900 tracking-tight">{result.position}</h4>
-                <p className="text-xs text-gray-400 mt-0.5">Total Votes: {result.totalVotes}</p>
-              </div>
-              {isExpanded ? <ChevronUp className="h-5 w-5 text-gray-400" /> : <ChevronDown className="h-5 w-5 text-gray-400" />}
-            </button>
+            return (
+              <div key={result.position} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                <button
+                  type="button"
+                  className="w-full px-5 py-4 flex items-center justify-between hover:bg-gray-50/70 text-left transition-colors"
+                  onClick={() => togglePosition(result.position)}
+                >
+                  <div>
+                    <h4 className="text-base font-extrabold text-gray-900 tracking-tight">{result.position}</h4>
+                    <p className="text-xs text-gray-400 mt-0.5">Total Votes: {result.totalVotes}</p>
+                  </div>
+                  {isExpanded ? <ChevronUp className="h-5 w-5 text-gray-400" /> : <ChevronDown className="h-5 w-5 text-gray-400" />}
+                </button>
 
-            {isExpanded && (
-              <div className="px-5 pb-5 space-y-4 border-t border-gray-50">
-                {/* Candidate bar chart */}
-                <div className="mt-4 rounded-2xl border border-gray-100 bg-gray-50/60 p-4">
-                  <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Candidate Comparison</p>
-                  <ResponsiveContainer width="100%" height={220}>
-                    <BarChart data={candidateChartData} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
-                      <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                      <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-                      <Tooltip
-                        contentStyle={{ borderRadius: 12, border: '1px solid #e5e7eb', fontSize: 12 }}
-                        formatter={(value: number, _n, item) => [`${value} votes (${item.payload.percentage.toFixed(1)}%)`, 'Result']}
-                      />
-                      <Bar dataKey="votes" fill="#166534" radius={[6, 6, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
+                {isExpanded && (
+                  <div className="px-5 pb-5 space-y-4 border-t border-gray-50">
+                    {/* Candidate bar chart */}
+                    <div className="mt-4 rounded-2xl border border-gray-100 bg-gray-50/60 p-4">
+                      <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Candidate Comparison</p>
+                      <ResponsiveContainer width="100%" height={220}>
+                        <BarChart data={candidateChartData} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
+                          <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                          <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                          <Tooltip
+                            contentStyle={{ borderRadius: 12, border: '1px solid #e5e7eb', fontSize: 12 }}
+                            formatter={(value: number, _n, item) => [`${value} votes (${item.payload.percentage.toFixed(1)}%)`, 'Result']}
+                          />
+                          <Bar dataKey="votes" fill="#166534" radius={[6, 6, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
 
-                {/* Candidate table */}
-                <div className="overflow-x-auto rounded-2xl border border-gray-100">
-                  <table className="w-full min-w-[640px] text-sm">
-                    <thead>
-                      <tr className="bg-[#1E3A8A]">
-                        {['Rank', 'Candidate', 'Votes', 'Percentage', 'Details'].map((h, i) => (
-                          <th
-                            key={h}
-                            className={`px-4 py-2.5 text-xs font-bold text-white uppercase tracking-wider ${i >= 2 ? 'text-right' : 'text-left'} ${i === 4 ? 'text-center' : ''}`}
-                          >
-                            {h}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {result.candidates.map((candidate) => {
-                        const rowKey     = `${result.position}::${candidate.candidateId}`;
-                        const rowExpanded = expandedCandidates.has(rowKey);
-                        const rowBg =
-                          candidate.rank === 1 ? 'bg-yellow-50/70'
-                          : candidate.rank === 2 ? 'bg-gray-50/70'
-                          : candidate.rank === 3 ? 'bg-orange-50/70'
-                          : 'bg-white';
+                    {/* Candidate table */}
+                    <div className="overflow-x-auto rounded-2xl border border-gray-100">
+                      <table className="w-full min-w-[640px] text-sm">
+                        <thead>
+                          <tr className="bg-[#1E3A8A]">
+                            {['Rank', 'Candidate', 'Votes', 'Percentage', 'Details'].map((h, i) => (
+                              <th
+                                key={h}
+                                className={`px-4 py-2.5 text-xs font-bold text-white uppercase tracking-wider ${i >= 2 ? 'text-right' : 'text-left'} ${i === 4 ? 'text-center' : ''}`}
+                              >
+                                {h}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {result.candidates.map((candidate) => {
+                            const rowKey = `${result.position}::${candidate.candidateId}`;
+                            const rowExpanded = expandedCandidates.has(rowKey);
+                            const rowBg =
+                              candidate.rank === 1 ? 'bg-yellow-50/70'
+                              : candidate.rank === 2 ? 'bg-gray-50/70'
+                              : candidate.rank === 3 ? 'bg-orange-50/70'
+                              : 'bg-white';
 
-                        return (
-                          <Fragment key={rowKey}>
-                            <tr
-                              className={`border-t border-gray-50 cursor-pointer hover:bg-blue-50/40 transition-colors ${rowBg}`}
-                              onClick={() => toggleCandidate(result.position, candidate.candidateId)}
-                            >
-                              <td className="px-4 py-2.5">
-                                <div className="flex items-center gap-2">
-                                  <span className="font-extrabold text-gray-900">#{candidate.rank}</span>
-                                  {rankBadge(candidate.rank)}
-                                </div>
-                              </td>
-                              <td className="px-4 py-2.5 font-semibold text-gray-900">{candidate.displayName}</td>
-                              <td className="px-4 py-2.5 text-right text-gray-700">{candidate.voteCount}</td>
-                              <td className="px-4 py-2.5 text-right text-gray-700">{candidate.percentage.toFixed(1)}%</td>
-                              <td className="px-4 py-2.5 text-center text-gray-400">
-                                {rowExpanded ? <ChevronUp className="mx-auto h-4 w-4" /> : <ChevronDown className="mx-auto h-4 w-4" />}
-                              </td>
-                            </tr>
-                            {rowExpanded && (
-                              <tr className="border-t border-gray-50">
-                                <td colSpan={5} className="bg-gray-50/60 px-4 py-4">
-                                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                                    {[
-                                      { label: 'Votes',                value: String(candidate.voteCount) },
-                                      { label: 'Percentage',           value: `${candidate.percentage.toFixed(1)}%` },
-                                      { label: 'Share of Position',    value: `${candidate.voteCount}/${result.totalVotes}` },
-                                    ].map(({ label, value }) => (
-                                      <div key={label} className="rounded-xl border border-gray-100 bg-white p-3">
-                                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{label}</p>
-                                        <p className="text-sm font-extrabold text-gray-900 mt-0.5">{value}</p>
+                            return (
+                              <Fragment key={rowKey}>
+                                <tr
+                                  className={`border-t border-gray-50 cursor-pointer hover:bg-blue-50/40 transition-colors ${rowBg}`}
+                                  onClick={() => toggleCandidate(result.position, candidate.candidateId)}
+                                >
+                                  <td className="px-4 py-2.5">
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-extrabold text-gray-900">#{candidate.rank}</span>
+                                      {rankBadge(candidate.rank)}
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-2.5 font-semibold text-gray-900">{candidate.displayName}</td>
+                                  <td className="px-4 py-2.5 text-right text-gray-700">{candidate.voteCount}</td>
+                                  <td className="px-4 py-2.5 text-right text-gray-700">{candidate.percentage.toFixed(1)}%</td>
+                                  <td className="px-4 py-2.5 text-center text-gray-400">
+                                    {rowExpanded ? <ChevronUp className="mx-auto h-4 w-4" /> : <ChevronDown className="mx-auto h-4 w-4" />}
+                                  </td>
+                                </tr>
+                                {rowExpanded && (
+                                  <tr className="border-t border-gray-50">
+                                    <td colSpan={5} className="bg-gray-50/60 px-4 py-4">
+                                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                                        {[
+                                          { label: 'Votes',                value: String(candidate.voteCount) },
+                                          { label: 'Percentage',           value: `${candidate.percentage.toFixed(1)}%` },
+                                          { label: 'Share of Position',    value: `${candidate.voteCount}/${result.totalVotes}` },
+                                        ].map(({ label, value }) => (
+                                          <div key={label} className="rounded-xl border border-gray-100 bg-white p-3">
+                                            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{label}</p>
+                                            <p className="text-sm font-extrabold text-gray-900 mt-0.5">{value}</p>
+                                          </div>
+                                        ))}
                                       </div>
-                                    ))}
-                                  </div>
-                                </td>
-                              </tr>
-                            )}
-                          </Fragment>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                                    </td>
+                                  </tr>
+                                )}
+                              </Fragment>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        );
-      })}
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 }
