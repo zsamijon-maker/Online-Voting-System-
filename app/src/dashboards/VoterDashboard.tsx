@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Vote, CheckCircle, Clock, Calendar, User as UserIcon,
   AlertCircle, Info, LogOut, Menu, X, TrendingUp, BarChart3,
@@ -7,7 +7,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useNotification } from '@/contexts/NotificationContext';
 import {
   getActiveElections, getAllElections, getCandidatesByPosition, getElectionPositions,
-  castVote, getElectionResults, getUserVotes,
+  castVotesBatch, getElectionResults, getUserVotes,
 } from '@/services/electionService';
 import type { Election, Candidate, ElectionPosition, ElectionResult, Vote as VoteType, User } from '@/types';
 import { formatDate, formatDateTime, formatElectionType } from '@/utils/formatters';
@@ -124,6 +124,7 @@ export default function VoterDashboard() {
   const [selectedElectionResults, setSelectedElectionResults] = useState<ElectionResult[]>([]);
   const [isLoadingResults, setIsLoadingResults] = useState(false);
   const [isMobileNavOpen, setIsMobileNavOpen] = useState(false);
+  const [pendingDraftCount, setPendingDraftCount] = useState(0);
   const [isLoading, setIsLoading]             = useState(true);
   const [error, setError]                     = useState<string | null>(null);
 
@@ -165,9 +166,41 @@ export default function VoterDashboard() {
 
   useEffect(() => { void fetchData(); }, [fetchData]);
 
+  const confirmDiscardDraftVotes = useCallback((): boolean => {
+    if (pendingDraftCount === 0) return true;
+    return window.confirm(
+      `You have ${pendingDraftCount} unsubmitted draft vote${pendingDraftCount > 1 ? 's' : ''}. Leave this voting screen and discard them?`
+    );
+  }, [pendingDraftCount]);
+
   const handleSelectElection = (election: Election) => { setSelectedElection(election); };
 
-  const handleVoteSuccess = () => { void fetchData(); };
+  const handleVoteSuccess = () => {
+    setPendingDraftCount(0);
+    void fetchData();
+  };
+
+  const handleTabChange = (value: string) => {
+    if (value === activeTab) {
+      setIsMobileNavOpen(false);
+      return;
+    }
+
+    if (activeTab === 'elections' && selectedElection && value !== 'elections') {
+      if (!confirmDiscardDraftVotes()) return;
+      setSelectedElection(null);
+      setPendingDraftCount(0);
+    }
+
+    setActiveTab(value);
+    setIsMobileNavOpen(false);
+  };
+
+  const handleBackToElectionsList = () => {
+    if (!confirmDiscardDraftVotes()) return;
+    setSelectedElection(null);
+    setPendingDraftCount(0);
+  };
 
   const getVotesForPosition = (electionId: string, position: string): VoteType[] =>
     userVotes.filter(v => v.electionId === electionId && v.position === position);
@@ -250,7 +283,7 @@ export default function VoterDashboard() {
     <div className="min-h-screen bg-[#F7F8FC] overflow-x-hidden">
       <Tabs
         value={activeTab}
-        onValueChange={(value) => { setActiveTab(value); setIsMobileNavOpen(false); }}
+        onValueChange={handleTabChange}
         className="min-h-screen"
       >
 
@@ -350,16 +383,17 @@ export default function VoterDashboard() {
           {/* Tab panels */}
           <div className="flex-1 px-5 py-6 sm:px-8 sm:py-8">
             <TabsContent value="overview">
-              <VoterOverviewTab elections={elections} userVotes={userVotes} onNavigate={setActiveTab} />
+              <VoterOverviewTab elections={elections} userVotes={userVotes} onNavigate={handleTabChange} />
             </TabsContent>
             <TabsContent value="elections">
               {selectedElection ? (
                 <VotingInterface
                   election={selectedElection}
-                  onBack={() => setSelectedElection(null)}
+                  onBack={handleBackToElectionsList}
                   voterId={user?.id || ''}
                   onVoteSuccess={handleVoteSuccess}
                   getVotesForPosition={getVotesForPosition}
+                  onDraftStateChange={setPendingDraftCount}
                 />
               ) : (
                 <ElectionsList
@@ -780,12 +814,13 @@ function ElectionsList({
 // VOTING INTERFACE (logic unchanged)
 // ═══════════════════════════════════════════════════════════════════════════════
 function VotingInterface({
-  election, onBack, voterId, onVoteSuccess, getVotesForPosition,
+  election, onBack, voterId, onVoteSuccess, getVotesForPosition, onDraftStateChange,
 }: {
   election: Election; onBack: () => void;
   voterId: string;
   onVoteSuccess: () => void;
   getVotesForPosition: (electionId: string, position: string) => VoteType[];
+  onDraftStateChange: (count: number) => void;
 }) {
   const { showSuccess, showError } = useNotification();
   const [positions, setPositions]                 = useState<ElectionPosition[]>([]);
@@ -793,9 +828,8 @@ function VotingInterface({
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
   const [isCandidateModalOpen, setIsCandidateModalOpen] = useState(false);
   const [selectedMaxVotes, setSelectedMaxVotes] = useState(1);
-  const [isQuickVotingCandidateId, setIsQuickVotingCandidateId] = useState<string | null>(null);
-  const [localPositionVoteCounts, setLocalPositionVoteCounts] = useState<Record<string, number>>({});
-  const [locallyVotedCandidateIds, setLocallyVotedCandidateIds] = useState<Set<string>>(new Set());
+  const [draftSelectionsByPosition, setDraftSelectionsByPosition] = useState<Record<string, string[]>>({});
+  const [isSubmittingAllVotes, setIsSubmittingAllVotes] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -816,31 +850,123 @@ function VotingInterface({
     return () => { cancelled = true; };
   }, [election.id]);
 
-  const handleQuickVote = async (candidate: Candidate, positionName: string, disabled: boolean) => {
-    if (disabled || isQuickVotingCandidateId !== null) return;
+  useEffect(() => {
+    setDraftSelectionsByPosition({});
+    setSelectedCandidate(null);
+    setIsCandidateModalOpen(false);
+    setIsSubmittingAllVotes(false);
+  }, [election.id]);
 
-    setIsQuickVotingCandidateId(candidate.id);
+  const draftSummaryByPosition = useMemo(() => (
+    positions
+      .map((position) => {
+        const selectedIds = draftSelectionsByPosition[position.name] ?? [];
+        const candidates = candidatesByPosition[position.name] ?? [];
+        const submittedVotesCount = getVotesForPosition(election.id, position.name).length;
+        const selectedCandidates = selectedIds
+          .map((candidateId) => candidates.find((item) => item.id === candidateId))
+          .filter((candidate): candidate is Candidate => Boolean(candidate));
+
+        return {
+          positionName: position.name,
+          maxVotes: position.voteLimit,
+          submittedVotesCount,
+          selectedCount: selectedCandidates.length,
+          selectedCandidates,
+        };
+      })
+      .filter((entry) => entry.selectedCount > 0)
+  ), [positions, draftSelectionsByPosition, candidatesByPosition, getVotesForPosition, election.id]);
+
+  const totalDraftSelections = useMemo(
+    () => draftSummaryByPosition.reduce((sum, entry) => sum + entry.selectedCount, 0),
+    [draftSummaryByPosition]
+  );
+
+  useEffect(() => {
+    onDraftStateChange(totalDraftSelections);
+    return () => { onDraftStateChange(0); };
+  }, [totalDraftSelections, onDraftStateChange]);
+
+  useEffect(() => {
+    if (totalDraftSelections === 0) return;
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [totalDraftSelections]);
+
+  const handleToggleCandidateSelection = (
+    candidate: Candidate,
+    positionName: string,
+    maxVotes: number,
+    submittedVotesCount: number
+  ) => {
+    if (isSubmittingAllVotes) return;
+
+    setDraftSelectionsByPosition((prev) => {
+      const currentSelections = prev[positionName] ?? [];
+      const isSelected = currentSelections.includes(candidate.id);
+
+      if (isSelected) {
+        return {
+          ...prev,
+          [positionName]: currentSelections.filter((id) => id !== candidate.id),
+        };
+      }
+
+      const usedVotes = submittedVotesCount + currentSelections.length;
+      if (usedVotes >= maxVotes) {
+        showError(`Maximum votes reached for ${positionName}. Limit: ${maxVotes}.`);
+        return prev;
+      }
+
+      return {
+        ...prev,
+        [positionName]: [...currentSelections, candidate.id],
+      };
+    });
+  };
+
+  const handleSubmitAllVotes = async () => {
+    const selections = positions.flatMap((position) => {
+      const ids = draftSelectionsByPosition[position.name] ?? [];
+      return ids.map((candidateId) => ({
+        candidateId,
+        position: position.name,
+      }));
+    });
+
+    if (selections.length === 0) {
+      showError('No candidates selected yet. Please add candidates to your ballot first.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Submit ${selections.length} vote${selections.length > 1 ? 's' : ''} now? This action cannot be undone.`
+    );
+    if (!confirmed) return;
+
+    setIsSubmittingAllVotes(true);
     try {
-      const result = await castVote(candidate.electionId, voterId, candidate.id, candidate.position);
+      const result = await castVotesBatch(election.id, voterId, selections);
       if (!result.success) {
-        showError(result.error || 'Failed to cast vote');
+        showError(result.error || 'Failed to submit selected votes. Please try again.');
         return;
       }
 
-      setLocallyVotedCandidateIds((prev) => {
-        const next = new Set(prev);
-        next.add(candidate.id);
-        return next;
-      });
-      setLocalPositionVoteCounts((prev) => ({
-        ...prev,
-        [positionName]: (prev[positionName] ?? 0) + 1,
-      }));
-
-      showSuccess('Your vote has been recorded successfully!');
+      setDraftSelectionsByPosition({});
+      const submittedCount = result.submittedCount ?? selections.length;
+      showSuccess(`Successfully submitted ${submittedCount} vote${submittedCount > 1 ? 's' : ''}.`);
       onVoteSuccess();
     } finally {
-      setIsQuickVotingCandidateId(null);
+      setIsSubmittingAllVotes(false);
     }
   };
 
@@ -859,21 +985,99 @@ function VotingInterface({
           <h2 className="text-2xl font-extrabold text-gray-900 tracking-tight">{election.title}</h2>
           <p className="text-sm text-gray-500 mt-1">{election.description}</p>
         </div>
-        <span className="inline-flex items-center gap-1.5 bg-white border border-gray-200 rounded-full px-3 py-1.5 text-xs font-semibold text-gray-600 w-fit shrink-0">
-          <Clock className="w-3 h-3" /> Ends {formatDateTime(election.endDate)}
-        </span>
+        <div className="flex flex-col items-start sm:items-end gap-3 lg:shrink-0">
+          <span className="inline-flex items-center gap-1.5 bg-white border border-gray-200 rounded-full px-3 py-1.5 text-xs font-semibold text-gray-600 w-fit shrink-0 whitespace-nowrap">
+            <Clock className="w-3 h-3" /> Ends {formatDateTime(election.endDate)}
+          </span>
+          <ActionBtn
+            color="green"
+            onClick={() => { void handleSubmitAllVotes(); }}
+            disabled={totalDraftSelections === 0 || isSubmittingAllVotes}
+          >
+            <Vote className="w-4 h-4" />
+            <span className="whitespace-nowrap">
+              {isSubmittingAllVotes
+                ? 'Submitting...'
+                : `Submit All Votes (${totalDraftSelections})`}
+            </span>
+          </ActionBtn>
+        </div>
       </div>
+
+      <SectionCard className="border-blue-100 bg-blue-50/40">
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-bold text-blue-500 uppercase tracking-wider mb-1">Draft Ballot</p>
+              <p className="text-sm text-blue-800 font-semibold">
+                {totalDraftSelections > 0
+                  ? `${totalDraftSelections} candidate${totalDraftSelections > 1 ? 's' : ''} selected. Review, then submit once.`
+                  : 'Select candidates from cards or modal, then submit all votes in one action.'}
+              </p>
+            </div>
+          </div>
+
+          {totalDraftSelections > 0 && (
+            <div className="space-y-3">
+              {draftSummaryByPosition.map((group) => (
+                <div
+                  key={group.positionName}
+                  className="rounded-xl border border-blue-100 bg-white p-3"
+                >
+                  <div className="flex flex-col gap-2">
+                    <div className="flex flex-wrap items-center gap-2 justify-between">
+                      <p className="text-xs font-semibold text-gray-900">{group.positionName}</p>
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border border-blue-200 bg-blue-50 text-blue-700">
+                          {group.selectedCount}/{group.maxVotes} selected
+                        </span>
+                        {group.submittedVotesCount > 0 && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold border border-green-200 bg-green-50 text-green-700">
+                            {group.submittedVotesCount}/{group.maxVotes} submitted
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      {group.selectedCandidates.map((candidate) => (
+                        <div key={candidate.id} className="flex items-center justify-between rounded-lg border border-gray-100 px-2.5 py-2">
+                          <p className="text-xs font-semibold text-gray-800 truncate pr-3">{candidate.displayName}</p>
+                          <button
+                            type="button"
+                            className="text-[11px] font-semibold text-red-600 hover:text-red-700"
+                            onClick={() => {
+                              handleToggleCandidateSelection(
+                                candidate,
+                                group.positionName,
+                                group.maxVotes,
+                                group.submittedVotesCount
+                              );
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </SectionCard>
 
       {/* Positions */}
       <div className="space-y-6">
         {positions.map((position) => {
           const positionName      = position.name;
           const candidates        = candidatesByPosition[positionName] || [];
-          const votesForPosition  = getVotesForPosition(election.id, positionName);
+          const submittedVotesForPosition = getVotesForPosition(election.id, positionName);
           const maxVotes          = position.voteLimit;
-          const localVotes        = localPositionVoteCounts[positionName] || 0;
-          const usedVotes         = votesForPosition.length + localVotes;
-          const votedCandidateIds = new Set(votesForPosition.map((vote) => vote.candidateId));
+          const selectedIds       = draftSelectionsByPosition[positionName] || [];
+          const usedVotes         = submittedVotesForPosition.length + selectedIds.length;
+          const votedCandidateIds = new Set(submittedVotesForPosition.map((vote) => vote.candidateId));
           const votesRemaining    = Math.max(0, maxVotes - usedVotes);
           const hasReachedLimit   = votesRemaining === 0;
 
@@ -912,25 +1116,32 @@ function VotingInterface({
               )}
 
               {/* Candidate grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
                 {candidates.map((candidate) => (
                   (() => {
-                    const isVoted = votedCandidateIds.has(candidate.id) || locallyVotedCandidateIds.has(candidate.id);
-                    const isVoting = isQuickVotingCandidateId === candidate.id;
-                    const disabled = hasReachedLimit || isVoted || isVoting || isQuickVotingCandidateId !== null;
+                    const isSubmitted = votedCandidateIds.has(candidate.id);
+                    const isSelected = selectedIds.includes(candidate.id);
+                    const disabled = isSubmittingAllVotes || isSubmitted || (!isSelected && hasReachedLimit);
                     return (
                   <CandidateCard
                     key={candidate.id}
                     candidate={candidate}
-                    isVoted={isVoted}
+                    isSubmitted={isSubmitted}
+                    isSelected={isSelected}
                     disabled={disabled}
-                    isVoting={isVoting}
                     onViewDetails={() => {
                       setSelectedCandidate(candidate);
                       setSelectedMaxVotes(maxVotes);
                       setIsCandidateModalOpen(true);
                     }}
-                    onQuickVote={() => { void handleQuickVote(candidate, positionName, disabled); }}
+                    onToggleSelection={() => {
+                      handleToggleCandidateSelection(
+                        candidate,
+                        positionName,
+                        maxVotes,
+                        submittedVotesForPosition.length
+                      );
+                    }}
                   />
                     );
                   })()
@@ -948,9 +1159,16 @@ function VotingInterface({
           setSelectedCandidate(null);
         }}
         candidate={selectedCandidate}
-        voterId={voterId}
         maxVotesForPosition={selectedMaxVotes}
-        onVoteSuccess={onVoteSuccess}
+        selectedCandidateIdsForPosition={selectedCandidate ? (draftSelectionsByPosition[selectedCandidate.position] || []) : []}
+        submittedCandidateIdsForPosition={selectedCandidate ? getVotesForPosition(election.id, selectedCandidate.position).map((vote) => vote.candidateId) : []}
+        onToggleSelection={(candidate) => {
+          const position = positions.find((item) => item.name === candidate.position);
+          if (!position) return;
+          const submittedVotesCount = getVotesForPosition(election.id, candidate.position).length;
+          handleToggleCandidateSelection(candidate, candidate.position, position.voteLimit, submittedVotesCount);
+        }}
+        isSubmittingAllVotes={isSubmittingAllVotes}
       />
     </div>
   );
@@ -960,21 +1178,21 @@ function VotingInterface({
 // CANDIDATE CARD (logic unchanged)
 // ═══════════════════════════════════════════════════════════════════════════════
 function CandidateCard({
-  candidate, isVoted, disabled, isVoting, onViewDetails, onQuickVote,
+  candidate, isSubmitted, isSelected, disabled, onViewDetails, onToggleSelection,
 }: {
   candidate: Candidate;
-  isVoted: boolean;
+  isSubmitted: boolean;
+  isSelected: boolean;
   disabled?: boolean;
-  isVoting?: boolean;
   onViewDetails: () => void;
-  onQuickVote: () => void;
+  onToggleSelection: () => void;
 }) {
   const [imageError, setImageError]   = useState(false);
 
   return (
     <div className={`
       bg-white rounded-2xl border overflow-hidden transition-all duration-200
-      ${isVoted ? 'border-green-200 ring-1 ring-green-200' : 'border-gray-100'}
+      ${isSubmitted ? 'border-green-200 ring-1 ring-green-200' : isSelected ? 'border-amber-200 ring-1 ring-amber-200' : 'border-gray-100'}
       ${!disabled ? 'hover:shadow-md hover:-translate-y-0.5' : 'opacity-75'}
     `}>
       {/* Photo */}
@@ -995,52 +1213,53 @@ function CandidateCard({
         )}
 
         {/* Voted overlay badge */}
-        {isVoted && (
-          <div className="absolute top-2 right-2 bg-green-500 text-white rounded-full p-1 shadow-md">
+        {(isSubmitted || isSelected) && (
+          <div className={`absolute top-2 right-2 text-white rounded-full p-1 shadow-md ${isSubmitted ? 'bg-green-500' : 'bg-amber-500'}`}>
             <CheckCircle className="w-4 h-4" />
           </div>
         )}
       </div>
 
       {/* Info */}
-      <div className="p-4 space-y-3">
+      <div className="p-3 sm:p-4 space-y-2 sm:space-y-3">
         <div>
-          <h4 className="text-sm font-extrabold text-gray-900">{candidate.displayName}</h4>
-          <p className="text-xs font-semibold text-[#1E3A8A] mt-1">{candidate.position}</p>
-          {candidate.bio && <p className="text-xs text-gray-500 mt-1 line-clamp-2 leading-relaxed">{candidate.bio}</p>}
+          <h4 className="text-sm sm:text-base font-extrabold text-gray-900 leading-tight line-clamp-2">{candidate.displayName}</h4>
+          <p className="text-xs sm:text-sm font-semibold text-[#1E3A8A] mt-1 truncate">{candidate.position}</p>
         </div>
 
-        <div className="space-y-2">
+        <div className="space-y-1.5 sm:space-y-2">
           <button
             type="button"
             onClick={onViewDetails}
-            className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
+            className="w-full flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold rounded-xl border border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
           >
-            <Info className="w-3.5 h-3.5" /> View Details
+            <Info className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> View Details
           </button>
 
           <button
             type="button"
-            onClick={onQuickVote}
+            onClick={onToggleSelection}
             disabled={disabled}
             className={`
-              w-full flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold rounded-xl
+              w-full flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-2 text-[11px] sm:text-xs font-bold rounded-xl
               transition-all duration-150
-              ${isVoted
+              ${isSubmitted
                 ? 'bg-green-50 text-green-700 border border-green-200 cursor-default'
+                : isSelected
+                ? 'bg-amber-50 text-amber-700 border border-amber-200'
                 : disabled
                 ? 'bg-gray-50 text-gray-400 border border-gray-200 cursor-not-allowed'
                 : 'bg-[#166534] hover:bg-[#14532d] text-white shadow-sm shadow-green-200 hover:-translate-y-px active:translate-y-0'
               }
             `}
           >
-            {isVoted
-              ? <><CheckCircle className="w-3.5 h-3.5" /> Already Voted</>
+            {isSubmitted
+              ? <><CheckCircle className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> Already Submitted</>
+              : isSelected
+              ? <><CheckCircle className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> Selected</>
               : disabled
               ? 'Unavailable'
-              : isVoting
-              ? 'Recording Vote...'
-              : <><Vote className="w-3.5 h-3.5" /> Vote</>}
+              : <><Vote className="w-3 h-3 sm:w-3.5 sm:h-3.5" /> Select</>}
           </button>
         </div>
       </div>

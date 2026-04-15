@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useState } from 'react';
 import { CheckCircle, Vote, Info } from 'lucide-react';
 import {
   Dialog,
@@ -8,96 +8,54 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { useNotification } from '@/contexts/NotificationContext';
-import type { Candidate, Vote as VoteType } from '@/types';
-import { castVote, getUserVotes } from '@/services/electionService';
+import type { Candidate } from '@/types';
 
 export type CandidateDetailsModalProps = {
   isOpen: boolean;
   onClose: () => void;
   candidate: Candidate | null;
-  voterId: string;
   maxVotesForPosition: number;
-  onVoteSuccess?: () => void;
+  selectedCandidateIdsForPosition: string[];
+  submittedCandidateIdsForPosition: string[];
+  onToggleSelection: (candidate: Candidate) => void;
+  isSubmittingAllVotes?: boolean;
 };
 
 export function CandidateDetailsModal({
   isOpen,
   onClose,
   candidate,
-  voterId,
   maxVotesForPosition,
-  onVoteSuccess,
+  selectedCandidateIdsForPosition,
+  submittedCandidateIdsForPosition,
+  onToggleSelection,
+  isSubmittingAllVotes = false,
 }: CandidateDetailsModalProps) {
-  const { showError } = useNotification();
-  const [isChecking, setIsChecking] = useState(false);
-  const [isVoting, setIsVoting] = useState(false);
-  const [votesForPosition, setVotesForPosition] = useState<VoteType[]>([]);
   const [imageError, setImageError] = useState(false);
 
-  useEffect(() => {
-    if (!isOpen || !candidate || !voterId) {
-      setVotesForPosition([]);
-      setIsChecking(false);
-      return;
-    }
+  const submittedCount = submittedCandidateIdsForPosition.length;
+  const selectedCount = selectedCandidateIdsForPosition.length;
+  const totalUsedVotes = submittedCount + selectedCount;
+  const votesRemaining = Math.max(0, maxVotesForPosition - totalUsedVotes);
 
-    let cancelled = false;
+  const isSubmitted = candidate ? submittedCandidateIdsForPosition.includes(candidate.id) : false;
+  const isSelected = candidate ? selectedCandidateIdsForPosition.includes(candidate.id) : false;
 
-    Promise.resolve().then(async () => {
-      setIsChecking(true);
-      try {
-        const votes = await getUserVotes(candidate.electionId, voterId);
-        if (cancelled) return;
-        setVotesForPosition(votes.filter((v) => v.position === candidate.position));
-      } catch {
-        if (!cancelled) {
-          setVotesForPosition([]);
-          showError('Unable to verify your vote status right now.');
-        }
-      } finally {
-        if (!cancelled) setIsChecking(false);
-      }
-    });
+  const canToggleSelection = Boolean(candidate)
+    && !isSubmittingAllVotes
+    && !isSubmitted
+    && (isSelected || votesRemaining > 0);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [isOpen, candidate, voterId, showError]);
-
-  const hasReachedLimit = votesForPosition.length >= maxVotesForPosition;
-  const hasAlreadyVotedPosition = votesForPosition.length > 0;
-
-  const voteButtonText = useMemo(() => {
-    if (isChecking) return 'Checking eligibility...';
-    if (isVoting) return 'Recording vote...';
-    if (hasReachedLimit || hasAlreadyVotedPosition) return 'Already Voted';
-    return 'Vote Now';
-  }, [isChecking, isVoting, hasReachedLimit, hasAlreadyVotedPosition]);
-
-  const canVote = Boolean(candidate)
-    && !isChecking
-    && !isVoting
-    && !hasReachedLimit
-    && !hasAlreadyVotedPosition;
-
-  const handleVote = async () => {
-    if (!candidate || !canVote) return;
-
-    setIsVoting(true);
-    try {
-      const result = await castVote(candidate.electionId, voterId, candidate.id, candidate.position);
-      if (!result.success) {
-        showError(result.error || 'Failed to record your vote.');
-        return;
-      }
-
-      onVoteSuccess?.();
-      onClose();
-    } finally {
-      setIsVoting(false);
-    }
-  };
+  const voteButtonText =
+    isSubmittingAllVotes
+      ? 'Submitting all votes...'
+      : isSubmitted
+      ? 'Already Submitted'
+      : isSelected
+      ? 'Remove from Ballot'
+      : votesRemaining > 0
+      ? 'Add to Ballot'
+      : 'Vote Limit Reached';
 
   const partylist = (candidate as Candidate & { partylist?: string } | null)?.partylist;
 
@@ -152,7 +110,7 @@ export function CandidateDetailsModal({
                 <div className="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3 flex items-start gap-2">
                   <Info className="w-4 h-4 text-blue-500 mt-0.5 shrink-0" />
                   <p className="text-sm text-blue-700">
-                    Votes used for this position: <span className="font-extrabold">{votesForPosition.length}/{maxVotesForPosition}</span>
+                    Votes used for this position: <span className="font-extrabold">{totalUsedVotes}/{maxVotesForPosition}</span>
                   </p>
                 </div>
               </div>
@@ -163,22 +121,24 @@ export function CandidateDetailsModal({
                 type="button"
                 onClick={onClose}
                 className="w-full sm:w-auto px-4 py-2 text-sm font-semibold rounded-xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 transition-colors"
-                disabled={isVoting}
+                disabled={isSubmittingAllVotes}
               >
                 Cancel
               </button>
               <button
                 type="button"
-                onClick={() => { void handleVote(); }}
-                disabled={!canVote}
+                onClick={() => { if (candidate) onToggleSelection(candidate); }}
+                disabled={!canToggleSelection}
                 className={[
                   'w-full sm:w-auto px-4 py-2 text-sm font-semibold rounded-xl transition-all duration-150 inline-flex items-center justify-center gap-2',
-                  canVote
-                    ? 'bg-[#166534] hover:bg-[#14532d] text-white shadow-sm shadow-green-200 hover:-translate-y-px active:translate-y-0'
+                  canToggleSelection
+                    ? isSelected
+                      ? 'bg-amber-600 hover:bg-amber-700 text-white shadow-sm shadow-amber-200 hover:-translate-y-px active:translate-y-0'
+                      : 'bg-[#166534] hover:bg-[#14532d] text-white shadow-sm shadow-green-200 hover:-translate-y-px active:translate-y-0'
                     : 'bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed',
                 ].join(' ')}
               >
-                {hasAlreadyVotedPosition || hasReachedLimit ? <CheckCircle className="w-4 h-4" /> : <Vote className="w-4 h-4" />}
+                {isSubmitted ? <CheckCircle className="w-4 h-4" /> : <Vote className="w-4 h-4" />}
                 {voteButtonText}
               </button>
             </DialogFooter>

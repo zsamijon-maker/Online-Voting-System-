@@ -1,6 +1,7 @@
 import { supabase } from '../lib/supabaseClient.js';
 import crypto from 'crypto';
 import { hasRole } from '../lib/roleUtils.js';
+import { writeAuditLog } from '../lib/auditLogger.js';
 
 // Only transition time-window states automatically; keep terminal states stable once set manually.
 const isAutoManagedElectionStatus = (status) => ['upcoming', 'active'].includes(status);
@@ -115,6 +116,112 @@ export const submitVote = async (req, res) => {
   }
 
   res.status(201).json({ message: 'Vote submitted successfully.', voteHash: resultRow.vote_hash });
+};
+
+// POST /api/votes/batch
+export const submitVotesBatch = async (req, res) => {
+  const { electionId, selections } = req.body;
+
+  if (!electionId || !Array.isArray(selections) || selections.length === 0) {
+    return res.status(400).json({ error: 'electionId and a non-empty selections array are required.' });
+  }
+
+  const candidateIds = selections
+    .map((selection) => selection?.candidateId)
+    .filter((candidateId) => typeof candidateId === 'string' && candidateId.length > 0);
+
+  if (candidateIds.length !== selections.length) {
+    return res.status(400).json({ error: 'Each selection must include a valid candidateId.' });
+  }
+
+  const uniqueCandidateIds = [...new Set(candidateIds)];
+  if (uniqueCandidateIds.length !== candidateIds.length) {
+    return res.status(400).json({ error: 'Duplicate candidate selections are not allowed.' });
+  }
+
+  const { data: election, error: electionError } = await supabase
+    .from('elections')
+    .select('id, status, start_date, end_date')
+    .eq('id', electionId)
+    .single();
+
+  if (electionError || !election) {
+    return res.status(404).json({ error: 'Election not found.' });
+  }
+
+  const effectiveStatus = isAutoManagedElectionStatus(election.status)
+    ? computeTimedElectionStatus(election.start_date, election.end_date)
+    : election.status;
+
+  if (effectiveStatus !== election.status) {
+    await supabase
+      .from('elections')
+      .update({ status: effectiveStatus, updated_at: new Date().toISOString() })
+      .eq('id', election.id);
+  }
+
+  if (effectiveStatus !== 'active') {
+    return res.status(400).json({ error: 'Election is not active.' });
+  }
+
+  const { data: submitResult, error: submitError } = await supabase.rpc('submit_votes_batch_atomic', {
+    p_election_id: electionId,
+    p_voter_id: req.user.id,
+    p_candidate_ids: uniqueCandidateIds,
+    p_ip_address: req.ip,
+    p_user_agent: req.headers['user-agent'] ?? null,
+  });
+
+  if (submitError) {
+    if (
+      submitError.code === 'PGRST202' ||
+      String(submitError.message || '').toLowerCase().includes('submit_votes_batch_atomic')
+    ) {
+      return res.status(500).json({
+        error: 'Batch voting service is not fully configured. Please apply the latest database migration.',
+      });
+    }
+    throw submitError;
+  }
+
+  const resultRow = Array.isArray(submitResult) ? submitResult[0] : submitResult;
+  if (!resultRow?.success) {
+    if (resultRow?.error_code === 'DUPLICATE_CANDIDATE') {
+      return res.status(409).json({ error: resultRow.error_message || 'One or more candidates were already voted.' });
+    }
+
+    if (resultRow?.error_code === 'POSITION_LIMIT_REACHED') {
+      return res.status(409).json({ error: resultRow.error_message || 'Position vote limit reached.' });
+    }
+
+    if (resultRow?.error_code === 'CANDIDATE_NOT_FOUND') {
+      return res.status(404).json({ error: resultRow.error_message || 'One or more candidates were not found.' });
+    }
+
+    if (resultRow?.error_code === 'CANDIDATE_ELECTION_MISMATCH') {
+      return res.status(400).json({ error: resultRow.error_message || 'Candidate does not belong to this election.' });
+    }
+
+    return res.status(400).json({ error: resultRow?.error_message || 'Unable to submit selected votes.' });
+  }
+
+  const submittedCount = resultRow.submitted_count ?? uniqueCandidateIds.length;
+  await writeAuditLog({
+    req,
+    action: 'votes_batch_submitted',
+    entityType: 'election',
+    entityId: electionId,
+    newValues: {
+      submittedCount,
+      candidateIds: uniqueCandidateIds,
+      submissionMode: 'submit_all',
+    },
+  });
+
+  res.status(201).json({
+    message: 'Votes submitted successfully.',
+    submittedCount,
+  });
 };
 
 // GET /api/elections/:electionId/results

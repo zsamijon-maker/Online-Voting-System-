@@ -176,6 +176,22 @@ export async function castVote(
   }
 }
 
+export async function castVotesBatch(
+  electionId: string,
+  _voterId: string,
+  selections: Array<{ candidateId: string; position: string }>
+): Promise<{ success: boolean; error?: string; submittedCount?: number }> {
+  try {
+    const data = await api.post<{ message: string; submittedCount: number }>('/api/votes/batch', {
+      electionId,
+      selections,
+    });
+    return { success: true, submittedCount: data.submittedCount };
+  } catch (error) {
+    return { success: false, error: (error as Error).message };
+  }
+}
+
 // ── Results ──────────────────────────────────────────────
 
 export async function getElectionResults(electionId: string): Promise<ElectionResult[]> {
