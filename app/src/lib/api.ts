@@ -3,7 +3,12 @@
  * Handles base URL, JWT token injection, and uniform error handling.
  */
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const PROD_FALLBACK_API_URL = '';
+const DEV_FALLBACK_API_URL = 'http://localhost:5000';
+
+const BASE_URL =
+  (import.meta.env.VITE_API_URL || '').trim() ||
+  (import.meta.env.PROD ? PROD_FALLBACK_API_URL : DEV_FALLBACK_API_URL);
 
 const TOKEN_KEY = 'ssvs_token';
 const REFRESH_TOKEN_KEY = 'ssvs_refresh_token';

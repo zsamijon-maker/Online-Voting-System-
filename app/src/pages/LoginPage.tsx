@@ -11,6 +11,8 @@ import { useNotification } from '@/contexts/NotificationContext';
 import { getSafeRedirectUrl } from '@/utils/safeRedirect';
 import type { RegistrationSetupData } from '@/types';
 
+const DEFAULT_POST_LOGIN_REDIRECT = 'https://online-voting-system-fejgnxjwk-zsamijon-makers-projects.vercel.app/dashboard';
+
 // ─── Google logo SVG (official brand colors, unchanged) ──────────────────────
 const GoogleIcon = () => (
   <svg className="w-4 h-4" viewBox="0 0 24 24" aria-hidden="true">
@@ -165,6 +167,14 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const returnTo = getSafeRedirectUrl(searchParams.get('returnTo'), '/dashboard');
+  const postLoginRedirectUrl = (import.meta.env.VITE_POST_LOGIN_REDIRECT_URL || DEFAULT_POST_LOGIN_REDIRECT).trim();
+
+  const redirectAfterLogin = () => {
+    const target = returnTo === '/dashboard'
+      ? postLoginRedirectUrl
+      : `${window.location.origin}${returnTo}`;
+    window.location.assign(target);
+  };
 
   // ── All auth hooks unchanged ──────────────────────────────────────────────
   const { login, verifyLoginTotp, setupStaffTotp, register, verifyRegistrationTotp } = useAuth();
@@ -229,7 +239,7 @@ export default function LoginPage() {
         setLoginPhase('totp');
       } else if (result.success) {
         showSuccess('Login successful!');
-        navigate(returnTo, { replace: true });
+        redirectAfterLogin();
       } else if (!result.success) {
         showError(result.error || 'Login failed');
       }
@@ -245,7 +255,7 @@ export default function LoginPage() {
     setIsLoading(true);
     try {
       const result = await verifyLoginTotp(loginChallengeToken, normalizeTotpCode(loginTotpCode));
-      if (result.success) { showSuccess('Login successful!'); navigate(returnTo, { replace: true }); }
+      if (result.success) { showSuccess('Login successful!'); redirectAfterLogin(); }
       else { showError(result.error || 'Invalid verification code'); setLoginTotpCode(''); }
     } catch { showError('An error occurred during verification'); }
     finally { otpSubmitInFlightRef.current = false; setIsLoading(false); }
@@ -265,7 +275,7 @@ export default function LoginPage() {
     setIsLoading(true);
     try {
       const result = await setupStaffTotp(staffSetupData.challengeToken, normalizeTotpCode(staffTotpCode));
-      if (result.success) { showSuccess('Two-factor authentication activated! Welcome.'); navigate(returnTo, { replace: true }); }
+      if (result.success) { showSuccess('Two-factor authentication activated! Welcome.'); redirectAfterLogin(); }
       else { showError(result.error || 'Invalid verification code'); setStaffTotpCode(''); }
     } catch { showError('An error occurred during verification'); }
     finally { otpSubmitInFlightRef.current = false; setIsLoading(false); }

@@ -31,7 +31,7 @@ const PORT = process.env.PORT || 5000;
 const rawOrigins =
   process.env.ALLOWED_ORIGINS ||
   process.env.FRONTEND_URL ||
-  'http://localhost:5173';
+  'http://localhost:5173,https://online-voting-system-fejgnxjwk-zsamijon-makers-projects.vercel.app';
 const allowedOrigins = rawOrigins
   .split(',')
   .map((o) => o.trim())

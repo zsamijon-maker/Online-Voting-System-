@@ -24,6 +24,8 @@ import type { User } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNotification } from '@/contexts/NotificationContext';
 
+const DEFAULT_POST_LOGIN_REDIRECT = 'https://online-voting-system-fejgnxjwk-zsamijon-makers-projects.vercel.app/dashboard';
+
 // ─── Types (unchanged) ────────────────────────────────────────────────────────
 type Phase = 'processing' | 'new' | 'totp_setup' | 'totp' | 'error';
 
@@ -141,6 +143,11 @@ export default function AuthCallback() {
   const navigate = useNavigate();
   const { setUserFromCallback } = useAuth();
   const { showError, showSuccess } = useNotification();
+  const postLoginRedirectUrl = (import.meta.env.VITE_POST_LOGIN_REDIRECT_URL || DEFAULT_POST_LOGIN_REDIRECT).trim();
+
+  const redirectAfterLogin = () => {
+    window.location.assign(postLoginRedirectUrl);
+  };
 
   // ── All state unchanged ───────────────────────────────────────────────────
   const [phase, setPhase]               = useState<Phase>('processing');
@@ -277,7 +284,7 @@ export default function AuthCallback() {
       setToken(data.accessToken, data.refreshToken);
       setUserFromCallback(camelize<User>(data.user));
       showSuccess('Signed in with Google!');
-      navigate('/dashboard', { replace: true });
+      redirectAfterLogin();
     } catch (err) {
       showError((err as Error).message || 'Invalid code. Please try again.');
       setTotpCode('');
@@ -306,7 +313,7 @@ export default function AuthCallback() {
       setToken(data.accessToken, data.refreshToken);
       setUserFromCallback(camelize<User>(data.user));
       showSuccess('Account activated! Welcome to SchoolVote.');
-      navigate('/dashboard', { replace: true });
+      redirectAfterLogin();
     } catch (err) {
       showError((err as Error).message || 'Setup failed. Please try again.');
       setSetupCode('');
