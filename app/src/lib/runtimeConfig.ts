@@ -74,9 +74,10 @@ export function getPostLoginRedirectTarget(): string {
  * 2) current-origin callback
  */
 export function getOAuthCallbackUrl(): string {
+  const defaultOAuthPath = isLocalHost() ? '/auth/callback' : '/';
   const currentOriginCallback = hasWindowLocation()
-    ? `${window.location.origin}/auth/callback`
-    : '/auth/callback';
+    ? `${window.location.origin}${defaultOAuthPath}`
+    : defaultOAuthPath;
 
   const configured = String(import.meta.env.VITE_OAUTH_REDIRECT_URL || '').trim();
   if (!configured) return currentOriginCallback;
