@@ -1,15 +1,21 @@
 
-// Simple API client using VITE_API_URL
-const API = import.meta.env.VITE_API_URL;
 
-export async function fetchData(endpoint: string, options?: RequestInit) {
-  const res = await fetch(`${API}${endpoint}`, options);
-  if (!res.ok) throw new Error('API error');
-  return res.json();
+// Central API client for the Secure School Voting System backend.
+// Handles base URL, JWT token injection, and uniform error handling.
+
+const BASE_URL = import.meta.env.VITE_API_URL;
+const TOKEN_KEY = 'ssvs_token';
+const REFRESH_TOKEN_KEY = 'ssvs_refresh_token';
+let refreshInFlight: Promise<string | null> | null = null;
+
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
 }
 
-// Usage example:
-// fetchData('/api/endpoint')
+export function setToken(token: string, refreshToken?: string): void {
+  localStorage.setItem(TOKEN_KEY, token);
+  if (refreshToken) localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+}
 
 export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
