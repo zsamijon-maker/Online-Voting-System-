@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
 import type {
   User,
   UserRole,
@@ -64,7 +64,7 @@ const rolePermissions: Record<UserRole, string[]> = {
   judge: ['pageant:view', 'contestant:score', 'score:submit'],
 };
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
+export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 

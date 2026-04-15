@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
 import { X, CheckCircle, AlertCircle, Info, AlertTriangle } from 'lucide-react';
 
 interface Notification {
@@ -21,8 +21,12 @@ interface NotificationContextType {
 
 const NotificationContext = createContext<NotificationContextType | undefined>(undefined);
 
-export function NotificationProvider({ children }: { children: React.ReactNode }) {
+export function NotificationProvider({ children }: { children: ReactNode }) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
+
+  const dismissNotification = useCallback((id: string) => {
+    setNotifications(prev => prev.filter(n => n.id !== id));
+  }, []);
 
   const showNotification = useCallback((notification: Omit<Notification, 'id'>) => {
     const id = `notification-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -37,7 +41,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         dismissNotification(id);
       }, duration);
     }
-  }, []);
+  }, [dismissNotification]);
 
   const showSuccess = useCallback((message: string, duration = 5000) => {
     showNotification({ type: 'success', message, duration });
@@ -54,10 +58,6 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const showInfo = useCallback((message: string, duration = 5000) => {
     showNotification({ type: 'info', message, duration });
   }, [showNotification]);
-
-  const dismissNotification = useCallback((id: string) => {
-    setNotifications(prev => prev.filter(n => n.id !== id));
-  }, []);
 
   const clearAll = useCallback(() => {
     setNotifications([]);

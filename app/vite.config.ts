@@ -6,8 +6,12 @@ import { defineConfig } from "vite"
 export default defineConfig({
   base: './',
   plugins: [react()],
+  optimizeDeps: {
+    include: ['react', 'react-dom'],
+  },
   
   resolve: {
+    dedupe: ['react', 'react-dom'],
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },

@@ -19,12 +19,11 @@ import {
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { supabase } from '@/lib/supabaseClient';
+import { getOAuthCallbackUrl, getPostLoginRedirectTarget } from '@/lib/runtimeConfig';
 import { api, setToken, camelize } from '@/lib/api';
 import type { User } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNotification } from '@/contexts/NotificationContext';
-
-const DEFAULT_POST_LOGIN_REDIRECT = 'https://online-voting-system-fejgnxjwk-zsamijon-makers-projects.vercel.app/dashboard';
 
 // ─── Types (unchanged) ────────────────────────────────────────────────────────
 type Phase = 'processing' | 'new' | 'totp_setup' | 'totp' | 'error';
@@ -143,10 +142,15 @@ export default function AuthCallback() {
   const navigate = useNavigate();
   const { setUserFromCallback } = useAuth();
   const { showError, showSuccess } = useNotification();
-  const postLoginRedirectUrl = (import.meta.env.VITE_POST_LOGIN_REDIRECT_URL || DEFAULT_POST_LOGIN_REDIRECT).trim();
+  const postLoginRedirectUrl = getPostLoginRedirectTarget();
 
   const redirectAfterLogin = () => {
-    window.location.assign(postLoginRedirectUrl);
+    if (postLoginRedirectUrl.startsWith('http://') || postLoginRedirectUrl.startsWith('https://')) {
+      window.location.assign(postLoginRedirectUrl);
+      return;
+    }
+
+    navigate(postLoginRedirectUrl, { replace: true });
   };
 
   // ── All state unchanged ───────────────────────────────────────────────────
@@ -179,7 +183,7 @@ export default function AuthCallback() {
       await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
+          redirectTo: getOAuthCallbackUrl(),
           queryParams: { access_type: 'offline', prompt: 'select_account' },
         },
       });

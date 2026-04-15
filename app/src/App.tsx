@@ -1,4 +1,5 @@
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { AuthProvider } from '@/contexts/AuthContext';
 import { NotificationProvider } from '@/contexts/NotificationContext';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -7,6 +8,32 @@ import LoginPage from '@/pages/LoginPage';
 import AuthCallback from '@/pages/AuthCallback';
 import DashboardRouter from '@/pages/DashboardRouter';
 import './App.css';
+
+function OAuthCodeRecovery() {
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const hasOAuthCode = params.has('code');
+    const onCallbackRoute = location.pathname === '/auth/callback';
+
+    // If OAuth lands on a non-callback route (e.g., '/?code=...'), reroute
+    // to the callback page so token exchange can complete.
+    if (hasOAuthCode && !onCallbackRoute) {
+      navigate(
+        {
+          pathname: '/auth/callback',
+          search: location.search,
+          hash: location.hash,
+        },
+        { replace: true }
+      );
+    }
+  }, [location.hash, location.pathname, location.search, navigate]);
+
+  return null;
+}
 
 /**
  * School Voting System - Main Application
@@ -29,6 +56,7 @@ function App() {
       <AuthProvider>
         <NotificationProvider>
           <Router>
+            <OAuthCodeRecovery />
             <Routes>
               {/* Public Routes */}
               <Route path="/" element={<LandingPage />} />

@@ -6,12 +6,11 @@ import {
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { supabase } from '@/lib/supabaseClient';
+import { getOAuthCallbackUrl, getPostLoginRedirectTarget } from '@/lib/runtimeConfig';
 import { useAuth } from '@/contexts/AuthContext';
 import { useNotification } from '@/contexts/NotificationContext';
 import { getSafeRedirectUrl } from '@/utils/safeRedirect';
 import type { RegistrationSetupData } from '@/types';
-
-const DEFAULT_POST_LOGIN_REDIRECT = 'https://online-voting-system-fejgnxjwk-zsamijon-makers-projects.vercel.app/dashboard';
 
 // ─── Google logo SVG (official brand colors, unchanged) ──────────────────────
 const GoogleIcon = () => (
@@ -167,13 +166,19 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const returnTo = getSafeRedirectUrl(searchParams.get('returnTo'), '/dashboard');
-  const postLoginRedirectUrl = (import.meta.env.VITE_POST_LOGIN_REDIRECT_URL || DEFAULT_POST_LOGIN_REDIRECT).trim();
+  const postLoginRedirectUrl = getPostLoginRedirectTarget();
 
   const redirectAfterLogin = () => {
     const target = returnTo === '/dashboard'
       ? postLoginRedirectUrl
-      : `${window.location.origin}${returnTo}`;
-    window.location.assign(target);
+      : returnTo;
+
+    if (target.startsWith('http://') || target.startsWith('https://')) {
+      window.location.assign(target);
+      return;
+    }
+
+    navigate(target, { replace: true });
   };
 
   // ── All auth hooks unchanged ──────────────────────────────────────────────
@@ -216,7 +221,7 @@ export default function LoginPage() {
       await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
+          redirectTo: getOAuthCallbackUrl(),
           queryParams: { access_type: 'offline', prompt: 'select_account' },
         },
       });
